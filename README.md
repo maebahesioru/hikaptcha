@@ -1,7 +1,7 @@
 # ヒカマニCAPTCHA(単体版)
 
-hikabooru([hikabooru.hikamers.app](https://hikabooru.hikamers.app))の**実在タグ付き画像**で出題する画像選択CAPTCHA。
-9枚の画像から「◯◯の画像を全部選んで」で人間確認する。依存パッケージゼロの単体サービス。
+hikabooru([hikabooru.hikamers.app](https://hikabooru.hikamers.app))の実在画像で出題する**お手本マッチング式CAPTCHA**。
+「お手本」の画像を1枚見せて、その下の9枚から**お手本と同じ種類の画像**を全部選んで人間確認する。依存パッケージゼロの単体サービス。
 
 ## 起動
 
@@ -16,7 +16,7 @@ PORT=8080 node server.mjs
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/challenge` | 出題 `{id, prompt, tiles:[{id,url}×9]}` |
+| GET | `/api/challenge` | 出題 `{id, sampleUrl, tiles:[{id,url}×9]}`(お手本1枚+選択9枚) |
 | POST | `/api/verify` | `{id, selected:[tileId...]}` → 正解なら `{ok:true, token}`(ワンタイム・5分) |
 | POST | `/api/consume` | `{token}` → 埋め込み先サーバーが登録/投稿前に消費 `{ok:true}` |
 | GET | `/api/health` | 生存確認 |
@@ -50,10 +50,12 @@ curl -X POST https://CAPTCHAサーバー/api/consume \
 
 ## 出題の仕組み
 
-1. hikabooruのsafe画像(約30,500枚)をランダムなoffset位置から16枚取得
-2. その中で2〜4枚に付く**日本語タグ**をお題に選択(メタ/数値/ユーザー名/文章系/広すぎるタグは除外)
-3. お題タグの画像=正解タイル、それ以外=ダミータイルで9枚グリッド
-4. 正解情報(タグ/投稿ID)はサーバー側のみ保持。クライアントへは画像URLと不透明IDのみ
+1. hikabooruのsafe画像(約30,500枚)をランダムなoffset位置から取得
+2. その中で3〜5枚に付くタグをお題に選ぶ(メタ/数字/謎タグ/UI語等は機械フィルタで除外)
+3. お題タグが付く画像から「お手本」を1枚、タイル用の正解を2〜3枚選ぶ
+4. ダミーは同じバッチ内でお題タグが付かない画像
+5. **タグ名はクライアントに見せない**。人間はお手本画像と見比べて「同じ種類の画像」を選ぶ
+6. 正解情報(どのタイルがお題タグを持つか)はサーバー側のみ保持。クライアントへは画像URLと不透明IDのみ
 
 ## 注意・限界
 

@@ -30,6 +30,24 @@
     .hkc-prompt { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: #d4d4d8; }
     .hkc-prompt b { color: #7dd3fc; }
     .hkc-prompt .all { color: #fcd34d; }
+    .hkc-sample {
+      margin: 0 0 12px;
+      display: flex;
+      justify-content: center;
+      padding: 10px;
+      background: #0c0c0e;
+      border: 1px dashed #52525b;
+      border-radius: 10px;
+    }
+    .hkc-sample img {
+      max-width: 210px;
+      max-height: 210px;
+      object-fit: contain;
+      border: 2px solid #fcd34d;
+      border-radius: 8px;
+      background: #000;
+      display: block;
+    }
     .hkc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .hkc-tile {
       position: relative;
@@ -103,18 +121,27 @@
       box.textContent = "";
       box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
 
-      if (ch && ch.prompt && !busy) {
+      // お手本画像(タグ名は出さない): 同じ種類の画像を下のグリッドから選ぶ
+      if (ch && ch.sampleUrl && !busy) {
         const p = el("p", "hkc-prompt");
-        p.appendChild(document.createTextNode("下の画像の中から「"));
-        const b = el("b");
-        b.textContent = ch.prompt;
-        p.appendChild(b);
-        p.appendChild(document.createTextNode("」の画像を"));
+        p.appendChild(document.createTextNode("下の"));
         const all = el("b", "all");
-        all.textContent = "全部";
+        all.textContent = "お手本";
         p.appendChild(all);
+        p.appendChild(document.createTextNode("の画像と同じ種類の画像を"));
+        const all2 = el("b", "all");
+        all2.textContent = "全部";
+        p.appendChild(all2);
         p.appendChild(document.createTextNode("選んでください"));
         box.appendChild(p);
+        const smp = el("div", "hkc-sample");
+        const simg = document.createElement("img");
+        simg.referrerPolicy = "no-referrer"; // ホットリンク対策
+        simg.src = ch.sampleUrl;
+        simg.alt = "お手本";
+        simg.draggable = false;
+        smp.appendChild(simg);
+        box.appendChild(smp);
       }
 
       if (!ch) {
