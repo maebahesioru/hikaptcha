@@ -73,10 +73,13 @@ function shuffle(arr) {
   return a;
 }
 
-// ---------- 出題生成(ホワイトリスト方式) ----------
-// hikabooruのタグはメタ/文の断片/謎タグだらけで、機械フィルタでは限界がある。
-// あらかじめ「画像を見て人間が確実に判別できる」と手選定したタグ
-// (good-tags.json)だけをお題に使う。お題=視覚タグなので常に解ける問題になる。
+// ---------- 出題生成(ランダムバッチ+視覚タグ発見) ----------
+// 方針: 画像は毎回ランダムなバッチ(バラエティ)。
+//       お題タグは、そのバッチに2〜4枚付いているタグのうち
+//       「画像を見て人間が確実に判別できる」と手選定した視覚タグ
+//       (good-tags.json)だけを採用(精度)。
+//       → いつも解ける問題 + バッチが違えば出題も変わる。
+//       → ダミーは同じバッチの別画像なので、ホワイトリスト一発出題よりは難易度がある。
 
 let GOOD_TAGS = [];
 try {
@@ -88,6 +91,7 @@ if (!Array.isArray(GOOD_TAGS) || GOOD_TAGS.length < 30) {
   console.error("good-tags.json が読めないか短すぎます");
   process.exit(1);
 }
+const GOOD_SET = new Set(GOOD_TAGS);
 
 // タイルは正方形なので、極端な縦長/横長(9:16未満・16:9超)は
 // 表示したときに小さく/切れて判別不能になる → 出題から除外
@@ -99,10 +103,11 @@ function goodAspect(p) {
   return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
 }
 
-// タグ指定でsafe画像を取得(アスペクト比OKのみ・タグ名も返す)
-async function fetchByTag(tag, limit) {
-  const q = encodeURIComponent(`tag:${tag} safety:safe type:image`);
-  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
+// ランダムなoffset位置からsafe画像を1バッチ引く(タグ名も返す)
+async function fetchRandomImageBatch(limit) {
+  const offset = Math.floor(Math.random() * 29500);
+  const q = encodeURIComponent("safety:safe type:image");
+  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
   return (d?.results || [])
     .filter((p) => p && p.id && p.thumbnailUrl && goodAspect(p))
     .map((p) => ({
@@ -112,43 +117,51 @@ async function fetchByTag(tag, limit) {
     }));
 }
 
-// お題タグを1つ選ぶ(候補から順に、safe画像が2枚以上あるタグを採用)
-async function pickTargetTag() {
-  for (const tag of shuffle(GOOD_TAGS).slice(0, 14)) {
-    const imgs = await fetchByTag(tag, 10);
-    if (imgs.length >= 2) return { tag, imgs };
-  }
-  return null;
+// 候補タグとして数える前に弾く簡易フィルタ(メタ/数字/文断片等)
+const NUM_RE = /[0-9０-９]/;
+const HIRA_TAIL_RE = /[\u3040-\u309f]$/;
+const HAS_KATAKANA_OR_KANJI = /[\u30a1-\u30f6\u3400-\u9fff]/;
+const JUNK_START_RE = /^[、。，「」（）()・\s\-_/\\@]/;
+function looseTagOk(t) {
+  if (!t || t.length < 2 || t.length > 10) return false;
+  if (NUM_RE.test(t)) return false;
+  if (HIRA_TAIL_RE.test(t)) return false;
+  if (JUNK_START_RE.test(t)) return false;
+  if (/\s/.test(t)) return false;
+  return HAS_KATAKANA_OR_KANJI.test(t);
 }
 
-// 1) ホワイトリストからお題タグを選ぶ
-// 2) そのタグの画像2〜4枚=正解タイル
-// 3) 別の視覚タグの画像5〜7枚=ダミータイル(お題タグが付いてないもののみ・見た目が明確に別物)
 async function makeChallenge() {
-  for (let i = 0; i < 8; i++) {
-    const picked = await pickTargetTag();
-    if (!picked) continue;
-    const { tag, imgs } = picked;
+  for (let i = 0; i < 30; i++) {
+    const batch = await fetchRandomImageBatch(16);
+    if (batch.length < GRID_SIZE) continue;
 
-    // 正解は2〜4枚(タグの画像枚数次第)
-    const targetCount = Math.min(4, imgs.length, 2 + Math.floor(Math.random() * 3));
-    const targets = shuffle(imgs).slice(0, targetCount);
-    const need = GRID_SIZE - targets.length;
-
-    // ダミー: お題とは別の選定済みタグから(お題タグが重複してない画像のみ)
-    let distractors = [];
-    for (const dTag of shuffle(GOOD_TAGS)) {
-      if (dTag === tag) continue;
-      const dimgs = await fetchByTag(dTag, 14);
-      const usable = shuffle(dimgs).filter(
-        (x) => !x.tags.has(tag) && !targets.some((t) => t.id === x.id)
-      );
-      if (usable.length >= need) {
-        distractors = usable.slice(0, need);
-        break;
+    // バッチ内タグの登場回数(簡易フィルタ通過のみ)
+    const counts = new Map();
+    for (const p of batch) {
+      for (const t of p.tags) {
+        if (!looseTagOk(t)) continue;
+        counts.set(t, (counts.get(t) || 0) + 1);
       }
     }
-    if (distractors.length < need) continue;
+    // 2〜4枚に付くタグのうち、手選定の視覚タグ(GOOD_SET)に含まれるものだけがお題候補
+    const candidates = [];
+    for (const [tag, n] of counts) {
+      if (n >= 2 && n <= 4 && GOOD_SET.has(tag)) candidates.push({ tag, n });
+    }
+    if (!candidates.length) continue; // このバッチに良いお題が無ければ次のバッチへ
+
+    // 重み付きランダム選択(出現数が多い方をやや優先)
+    const roulette = [];
+    for (const c of candidates) for (let k = 0; k < c.n; k++) roulette.push(c.tag);
+    const tag = roulette[Math.floor(Math.random() * roulette.length)];
+    const tagCount = counts.get(tag) || 2;
+
+    // 正解=お題タグが付く画像(2〜4枚) / ダミー=同じバッチ内でお題タグが付かない画像
+    const targets = batch.filter((p) => p.tags.has(tag)).slice(0, tagCount);
+    const rest = batch.filter((p) => !p.tags.has(tag));
+    if (rest.length < GRID_SIZE - targets.length) continue;
+    const distractors = shuffle(rest).slice(0, GRID_SIZE - targets.length);
 
     const tiles = shuffle([
       ...targets.map((p) => ({
