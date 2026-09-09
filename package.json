@@ -1,0 +1,14 @@
+{
+  "name": "hikamani-captcha",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "hikabooruの画像で出題するヒカマニCAPTCHA(単体・埋め込み可能)",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

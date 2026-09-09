@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ヒカマニCAPTCHA</title>
+<style>
+  body { margin: 0; background: #0c0c0e; color: #e4e4e7; font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+  .wrap { max-width: 520px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #71717a; margin: 0 0 20px; line-height: 1.6; }
+  .sub a { color: #7dd3fc; }
+  .card { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; padding: 16px; }
+  .token-box { margin-top: 12px; font-size: 12px; }
+  .token-box code { display: block; word-break: break-all; background: #0c0c0e; border: 1px solid #3f3f46; border-radius: 8px; padding: 8px; color: #7dd3fc; margin-top: 4px; }
+  .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  .b-blue { background: #0369a1; color: #fff; }
+  .b-gray { background: #27272a; color: #d4d4d8; border: 1px solid #3f3f46; }
+  .b-blue:hover { background: #0284c7; }
+  .b-gray:hover { background: #3f3f46; }
+  .res { font-size: 12px; margin-top: 8px; }
+  .res.ok { color: #34d399; }
+  .res.err { color: #f87171; }
+  code.line { background:#27272a; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🤖 ヒカマニCAPTCHA</h1>
+  <p class="sub">
+    hikabooru(<a href="https://hikabooru.hikamers.app" target="_blank" rel="noopener">hikabooru.hikamers.app</a>)の実在タグ付き画像で出題する画像選択CAPTCHA。<br>
+    このページはウィジェットの動作確認&トークン発行→消費の実地テスト台。
+  </p>
+
+  <div class="card">
+    <!-- ここにウィジェットが描画される -->
+    <div id="captcha"></div>
+
+    <div class="token-box">
+      解決トークン
+      <code id="token">(まだ無し)</code>
+    </div>
+    <div class="row">
+      <button id="btn-consume" class="b-blue" disabled>トークンを消費(登録ゲート動作テスト)</button>
+      <button id="btn-reset" class="b-gray">最初からやり直す</button>
+    </div>
+    <div id="res" class="res"></div>
+  </div>
+
+  <p class="sub" style="margin-top:16px">
+    埋め込み例: このウィジェット(captcha.js)を他のサイトに貼れば、どのサイトの登録・投稿ゲートにも使える。<br>
+    サーバー側では解決トークンを <code class="line">POST /api/consume {"token":"..."}</code> に投げて1回だけ消費してから受け付ける。<br>
+    ※ 外部CDN不使用・自鯖配信のためSRI対象外。画像はすべてhikabooru(CF配信)のサムネイル。
+  </p>
+</div>
+
+<!-- 自鯖配信のためSRI不要(同一オリジン) -->
+<script src="/captcha.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const tokenEl = $("token");
+  const consumeBtn = $("btn-consume");
+  const resEl = $("res");
+  let currentToken = null;
+
+  function showRes(text, ok) {
+    resEl.textContent = text;
+    resEl.className = "res " + (ok ? "ok" : "err");
+  }
+
+  HikamaniCaptcha.render($("captcha"), {
+    onSolved: function (token) {
+      currentToken = token;
+      tokenEl.textContent = token;
+      consumeBtn.disabled = false;
+      showRes("ロボット確認OK。トークンを消費して登録ゲートの動作をテストできます", true);
+    },
+  });
+
+  consumeBtn.addEventListener("click", function () {
+    if (!currentToken) return;
+    consumeBtn.disabled = true;
+    fetch("/api/consume", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: currentToken }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j && j.ok) {
+          showRes("消費成功: トークンはワンタイムなので、もう一度使うと無効になります", true);
+          tokenEl.textContent = "(消費済み)";
+          currentToken = null;
+        } else {
+          consumeBtn.disabled = false;
+          showRes("消費失敗: " + (j && j.error ? j.error : "不明なエラー"), false);
+        }
+      })
+      .catch(() => {
+        consumeBtn.disabled = false;
+        showRes("通信エラー", false);
+      });
+  });
+
+  $("btn-reset").addEventListener("click", function () {
+    currentToken = null;
+    tokenEl.textContent = "(まだ無し)";
+    consumeBtn.disabled = true;
+    resEl.textContent = "";
+    // ウィジェットを作り直して新しい問題を出す
+    const host = $("captcha");
+    host.textContent = "";
+    HikamaniCaptcha.render(host, {
+      onSolved: function (token) {
+        currentToken = token;
+        tokenEl.textContent = token;
+        consumeBtn.disabled = false;
+        showRes("ロボット確認OK。トークンを消費して登録ゲートの動作をテストできます", true);
+      },
+    });
+  });
+</script>
+</body>
+</html>
