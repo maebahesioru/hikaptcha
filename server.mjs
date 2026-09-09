@@ -36,7 +36,7 @@ const GRID_SIZE = 9;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 出題の有効期限
 const MAX_ATTEMPTS = 3; // 1出題あたりの回答試行回数
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費されるまで)
-const IP_QUOTA = 15; // IPごとの出題+回答リクエスト上限
+const IP_QUOTA = 60; // IPごとの出題+回答リクエスト上限(人間の試行錯誤ではまず到達しない水準)
 const IP_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHALLENGES = 2000;
 
@@ -74,9 +74,21 @@ function shuffle(arr) {
 }
 
 // ---------- お題タグの選別 ----------
+// hikabooruのタグはメタ/文の断片/謎タグだらけ。
+// 「画像を見て人間が解けるタグ」だけを通す厳しめフィルタ:
+//   - 日本語(カタカナ/漢字)を含む短いタグ(2〜10文字)
+//   - 数字・句読点始まり・メタ語(構図/技術/依頼系)を除外
+//   - ひらがな終端(助詞/活用形: 「黒地に」等)を除外
+//   - ひらがな3文字以上連続しうる文系(キャプション)を除外
+//   - 使用回数が10〜3000(低すぎ=ノイズ/高すぎ=メタ)
 
 const HAS_JP = /[\u3040-\u30ff\u3400-\u9fff]/;
 const HAS_KATAKANA_OR_KANJI = /[\u30a1-\u30f6\u3400-\u9fff]/;
+const HAS_NUM = /[0-9０-９]/;
+const HIRA = /[\u3040-\u309f]/;
+const JUNK_START = /^[、。，「」（）()・\s\-_/\\@]/;
+const HIRA_TAIL = /[\u3040-\u309f]$/; // ひらがな終端=助詞/活用形の可能性大
+const META_TAG = /上半身|バスト|胸像|クロースアップ|クローズアップ|全身|ポートレート|被写界深度|フレーム|コマ|ツイート|スクリーンショット|ハイレゾ|アルバム|タイムスタンプ|記号|テキスト|キャプション|字幕|ウェブ|アップロード|ダウンロード|チャンネル|ユーザー|ID|ロゴ|アイコン|ライブ|リフレクション|背景|動画|著作権|完成|日常|シンボル|スタンプ|スクショ/;
 const JUNK_TAG = [
   /^[\d０-９]+$/,
   /^[0-9a-z]{1,3}$/i,
@@ -91,7 +103,9 @@ const STOP_TAG = /ください|チェック|翻訳|依頼|解説|説明|聞い�
 const EXCLUDE_TAGS = new Set([
   "男性", "女性", "実写", "現実の生活", "現実的で", "写真背景", "複数の視点",
   "字幕", "ミーム", "おじいちゃん向けコンテンツ", "なんだって", "食べ物",
-  "1人の少年", "2人の男児", "立ち姿",
+  "1人の少年", "2人の男児", "立ち姿", "人物", "人々", "人間の", "子供", "少女",
+  "少年", "動物", "日本人", "オタク", "カジュアル", "服", "衣服", "髪", "目",
+  "顔", "手", "靴", "建物", "街", "家",
 ]);
 
 function usableTag(t) {
@@ -100,28 +114,55 @@ function usableTag(t) {
   return !JUNK_TAG.some((re) => re.test(t));
 }
 
-function questionableTag(t) {
+function questionableTag(t, usages) {
   if (!usableTag(t)) return false;
-  if (/\s/.test(t)) return false;
+  const n = Number(usages) || 0;
+  if (n < 10 || n > 3000) return false; // ノイズ/メタ排除
+  if (t.length > 10) return false;
+  if (HAS_NUM.test(t)) return false; // 年号・数字入りを排除
+  if (JUNK_START.test(t)) return false; // 句読点/記号始まり
+  if (/\s/.test(t)) return false; // 空白入りはクエリ区切りと解釈される
   if (EXCLUDE_TAGS.has(t)) return false;
   if (!HAS_KATAKANA_OR_KANJI.test(t)) return false; // ひらがなのみ除外
+  if (HIRA_TAIL.test(t)) return false; // 「黒地に」等の助詞/活用終端を除外
+  if (META_TAG.test(t)) return false; // 構図/技術/メタ語
   if (STOP_TAG.test(t)) return false;
+  if (HIRA.test(t) && (HIRA.test(t.slice(-2, -1)) || (t.match(/[\u3040-\u309f]/g) || []).length >= 3)) return false; // 文系キャプション
   return true;
 }
 
 // ---------- 出題生成 ----------
 
+// タイルは正方形なので、極端な縦長/横長(9:16未満・16:9超)は
+// 表示したときに小さく/切れて判別不能になる → 出題から除外
+function goodAspect(p) {
+  const w = Number(p.canvasWidth) || 0;
+  const h = Number(p.canvasHeight) || 0;
+  if (!w || !h) return false;
+  const r = w / h;
+  return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
+}
+
 async function fetchRandomImageBatch(limit) {
   const offset = Math.floor(Math.random() * 29500);
   const q = encodeURIComponent("safety:safe type:image");
-  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,thumbnailUrl,tags`);
+  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
   return (d?.results || [])
-    .filter((p) => p && p.id && p.thumbnailUrl)
-    .map((p) => ({
-      id: p.id,
-      url: absUrl(p.thumbnailUrl),
-      tags: new Set((p.tags || []).map((t) => (t.names && t.names[0]) || "").filter(Boolean)),
-    }));
+    .filter((p) => p && p.id && p.thumbnailUrl && goodAspect(p))
+    .map((p) => {
+      // タグ名とその使用回数(ノイズ/メタ判定に使う)を保持
+      const tagU = new Map();
+      for (const x of p.tags || []) {
+        const name = (x.names && x.names[0]) || "";
+        if (name) tagU.set(name, x.usages || 0);
+      }
+      return {
+        id: p.id,
+        url: absUrl(p.thumbnailUrl),
+        tags: new Set(tagU.keys()),
+        tagU,
+      };
+    });
 }
 
 async function makeChallenge() {
@@ -132,7 +173,8 @@ async function makeChallenge() {
     const counts = new Map();
     for (const p of batch) {
       for (const t of p.tags) {
-        if (!questionableTag(t)) continue;
+        const usages = p.tagU.get(t) || 0;
+        if (!questionableTag(t, usages)) continue;
         counts.set(t, (counts.get(t) || 0) + 1);
       }
     }

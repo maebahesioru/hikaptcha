@@ -22,7 +22,8 @@
       border: 1px solid #3f3f46;
       border-radius: 12px;
       padding: 14px;
-      max-width: 420px;
+      width: 100%;
+      max-width: 520px;
       user-select: none;
     }
     .hkc-title { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #a1a1aa; }
@@ -42,7 +43,12 @@
       display: block;
       transition: border-color .12s, opacity .12s;
     }
-    .hkc-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .hkc-tile img {
+      width: 100%; height: 100%;
+      /* 全体が見えるように contain(正方形クロップで切らない) */
+      object-fit: contain;
+      display: block;
+    }
     .hkc-tile:hover { border-color: #71717a; }
     .hkc-tile.sel { border-color: #7dd3fc; outline: 2px solid rgba(125, 211, 252, .6); outline-offset: -1px; }
     .hkc-tile.sel img { opacity: .82; }
@@ -123,6 +129,8 @@
         btn.type = "button";
         btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
         const img = document.createElement("img");
+        // hikabooruは外部Refererのホットリンクを403で弾く → Refererを送らない
+        img.referrerPolicy = "no-referrer";
         img.src = t.url;
         img.alt = "";
         img.loading = "lazy";
@@ -135,6 +143,9 @@
           else sel.add(t.id);
           btn.classList.toggle("sel", sel.has(t.id));
           btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
+          // 選択が1枚以上になったら確認ボタンを有効化(選択解除で無効化)
+          const okBtn = box.querySelector(".hkc-btn.ok");
+          if (okBtn) okBtn.disabled = sel.size === 0;
         });
         grid.appendChild(btn);
       });
