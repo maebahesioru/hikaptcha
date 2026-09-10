@@ -227,6 +227,7 @@
     let sel = new Set();
     let busy = false;
     let challengeAt = 0;
+    let waitTimer = null; // レート制限の待機カウントダウン用
 
     // 挙動シグナル(補助。サーバー側は画像配信の有無と実測時間を主軸に見る)
     const sig = { interactionSeen: false, pointerMoves: 0, pointerDistance: 0, clicks: 0, touchSeen: false, keySeen: false, powMs: 0 };
@@ -388,8 +389,20 @@
       layerStatus = { img: "", pow: "", beh: "", hp: "" };
       draw();
       fetch(apiBase + "/api/challenge", { cache: "no-store" })
-        .then(function (r) { return r.json().catch(function () { return {}; }); })
-        .then(function (j) {
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (j) {
+            return { status: r.status, j: j || {} };
+          });
+        })
+        .then(function (res) {
+          var j = res.j;
+          // レート制限は「待てば必ず再開できる」ので、待ち時間を出して自動で再取得する。
+          // エラー文字列を出して終わりにすると、ユーザーは何秒待てばいいか分からず詰む。
+          if (res.status === 429) {
+            var wait = Number(j.retryAfterSec || 0) || 5;
+            waitCountdown(wait);
+            return;
+          }
           if (!j || !j.tiles || !j.tiles.length) {
             msg(j && j.error ? j.error : "問題を取得できませんでした", true);
             return;
@@ -399,6 +412,34 @@
           draw();
         })
         .catch(function () { msg("通信エラーが起きました。再試行してください", true); });
+    }
+
+    // 待ち時間を1秒刻みで表示し、0になったら自動で取り直す
+    function waitCountdown(sec) {
+      if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+      var left = Math.max(1, Math.floor(sec));
+      var render = function () {
+        box.textContent = "";
+        box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
+        var p = el("p", "hkc-prompt");
+        var b = el("b", "all");
+        b.textContent = "あと" + left + "秒";
+        p.appendChild(document.createTextNode("アクセスが集中しています。"));
+        p.appendChild(b);
+        p.appendChild(document.createTextNode("で自動的に再開します"));
+        box.appendChild(p);
+        box.appendChild(el("div", "hkc-loading", "待機中..."));
+      };
+      render();
+      waitTimer = setInterval(function () {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(waitTimer); waitTimer = null;
+          load();
+          return;
+        }
+        render();
+      }, 1000);
     }
 
     async function submit() {
@@ -487,6 +528,7 @@
     }
 
     window.addEventListener("pagehide", function () {
+      if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);

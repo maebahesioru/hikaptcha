@@ -10,6 +10,9 @@ import { createHash, scryptSync } from "node:crypto";
 const PROD = "http://localhost:3107";
 const DEBUG = "http://localhost:3108";
 const UA = { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" };
+// ローカルIPはレート制限と難易度上昇の対象外にしている(開発で詰まらないため)。
+// テストは「外から来たクライアント」を装って、適応難易度・429の挙動を検証する。
+const FORWARDED = { ...UA, "x-forwarded-for": "203.0.113.77" };
 const sleep = (ms) => new Promise((s) => setTimeout(s, ms));
 
 // ウィジェットの実コード(scrypt + PoWソルバー)を抽出して使う
@@ -41,16 +44,16 @@ function solvePowNative(chal, saltHex, bits, N, r, p) {
   return null;
 }
 
-async function post(base, path, body) {
+async function post(base, path, body, headers) {
   const r = await fetch(base + path, {
-    method: "POST", headers: { ...UA, "Content-Type": "application/json" },
+    method: "POST", headers: { ...(headers || UA), "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   let j = null; try { j = await r.json(); } catch {}
   return { status: r.status, body: j };
 }
-async function challenge(base) {
-  const r = await fetch(base + "/api/challenge", { headers: UA });
+async function challenge(base, headers) {
+  const r = await fetch(base + "/api/challenge", { headers: headers || UA });
   return r.json();
 }
 // ブラウザと同じように全画像を取得する(サーバーが「配信した」と記録する)
@@ -216,21 +219,22 @@ async function main() {
   }
 
   // ---------- E) 適応難易度 ----------
-  console.log("\n=== E) 適応難易度 ===");
-  const before = (await challenge(DEBUG)).pow.bits;
+  console.log("\n=== E) 適応難易度(外部IPを装う) ===");
+  // ローカルIPは難易度を上げない設定なので、X-Forwarded-For で外部クライアントとして叩く
+  const before = (await challenge(DEBUG, FORWARDED)).pow.bits;
   let okRuns = 0;
   for (let i = 0; i < 3; i++) {
-    const c = await challenge(DEBUG);
+    const c = await challenge(DEBUG, FORWARDED);
     await fetchImages(c);
     const n = await W.solveScryptPow(c.pow.challenge, c.pow.salt, c.pow.bits, c.pow.N, c.pow.r, c.pow.p);
     await sleep(1600);
     const r = await post(DEBUG, "/api/verify", {
       id: c.id, selected: (c.tiles || []).filter((t) => t.target).map((t) => t.id),
       ticket: c.ticket, nonce: n.nonce, elapsedMs: 1700, signals: HUMAN_SIGNALS, website: "",
-    });
+    }, FORWARDED);
     if (r.body?.ok) okRuns++;
   }
-  const after = (await challenge(DEBUG)).pow.bits;
+  const after = (await challenge(DEBUG, FORWARDED)).pow.bits;
   console.log(`  突破 ${okRuns}回: 難易度 ${before}bit → ${after}bit`);
   check("突破実績でPoW難易度が上がる", after > before, `${before} -> ${after}`);
 

@@ -24,6 +24,25 @@ new = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`,
 assert old in s, "challenge payload pattern not found"
 s = s.replace(old, new)
 
+# 2) 例外の内容を応答に含める(テスト専用。原因追跡のため)
+old2 = 'res.end(JSON.stringify({ error: "サーバー内部エラーが発生しました" }));'
+new2 = 'res.end(JSON.stringify({ error: "サーバー内部エラーが発生しました", debug: String(err && err.stack || err) }));'
+assert old2 in s, "500 handler pattern not found"
+s = s.replace(old2, new2)
+
+# 2b) 429 のときに「どのIPでどう判定したか」を応答に含める(テスト専用)
+old3 = '''    { error: `リクエストが多すぎます。あと約${sec}秒で再開できます`, retryAfterMs, retryAfterSec: sec },'''
+new3 = '''    { error: `リクエストが多すぎます。あと約${sec}秒で再開できます`, retryAfterMs, retryAfterSec: sec },'''
+assert old3 in s, "429 body pattern not found"
+
+# 2b) 429時に「どのIPでどう判定したか」を記録して /api/health から見られるようにする(テスト専用)
+old3 = 'function checkQuota(req) {\n  if (isExemptRequest(req)) return { ok: true, remaining: Infinity, retryAfterMs: 0, exempt: true };'
+new3 = '''function checkQuota(req) {
+  if (isExemptRequest(req)) return { ok: true, remaining: Infinity, retryAfterMs: 0, exempt: true };
+  stats.lastQuota = { ip: clientIp(req), remote: req.socket && req.socket.remoteAddress, xff: req.headers["x-forwarded-for"] || null, xri: req.headers["x-real-ip"] || null };'''
+assert old3 in s, "checkQuota pattern not found"
+s = s.replace(old3, new3)
+
 # 2) デバッグコピーはポート3108
 s = s.replace('const PORT = Number(process.env.PORT || 3107);', 'const PORT = Number(process.env.PORT || 3108);')
 

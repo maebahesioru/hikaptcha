@@ -40,7 +40,14 @@ const GRID_SIZE = 9;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 出題の有効期限
 const MAX_ATTEMPTS = 3; // 1出題あたりの回答試行回数
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費されるまで)
-const IP_QUOTA = Number(process.env.IP_QUOTA || 60); // IPごとの出題+回答リクエスト上限
+// IPごとの出題+回答の上限。固定窓だと「使い切ったら窓が終わるまで全拒否」で
+// 待ち時間が最大10分になり、人間の試行錯誤でも詰まる(実測で自分でも踏んだ)。
+// → トークンバケットにして**使った分が少しずつ回復する**方式にした(崖を作らない)。
+const IP_QUOTA = Number(process.env.IP_QUOTA || 100); // 同時に持てるトークン数(バースト許容)
+const IP_REFILL_MS = Number(process.env.IP_REFILL_MS || 3000); // 1トークン回復する間隔(既定3秒=20回/分)
+// 開発・検証はローカル/プライベートIPからなので、そこは制限しない(自分で詰まらせないため)。
+// 公開時はリバースプロキシが X-Forwarded-For を付けるので、外からのアクセスには効く。
+const IP_QUOTA_EXEMPT_LOCAL = process.env.IP_QUOTA_EXEMPT_LOCAL !== "0";
 const IP_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHALLENGES = 2000;
 const MAX_PER_IP = 10; // 同一IPで同時に保持する出題の上限(別タブ・同一NAT対策)
@@ -154,22 +161,27 @@ function powScryptOk(challenge, nonce, salt, bits, N, r, p) {
 
 // 累計PoW仕事量(期待試行数)を記録し、予算超過を判定する。
 // 計算資源で突破されても、IPあたりの総仕事量を頭打ちにすれば速度を制限できる
-function chargeWork(ip, bits) {
+// 計算認証の累計仕事量の予算。上限に達したら「いつ回復するか」も返す。
+function chargeWork(ip, bits, exempt) {
   const now = Date.now();
-  const w = ipWork.get(ip);
   const cost = Math.pow(2, Math.max(0, Math.min(20, bits)));
+  if (exempt) return { ok: true };
+  const w = ipWork.get(ip);
   if (!w || now >= w.resetAt) {
     ipWork.set(ip, { work: cost, resetAt: now + IP_WORK_WINDOW_MS });
-    return true;
+    return { ok: true };
   }
-  if (w.work + cost > IP_WORK_BUDGET) return false;
+  if (w.work + cost > IP_WORK_BUDGET) {
+    return { ok: false, retryAfterMs: Math.max(1000, w.resetAt - now) };
+  }
   w.work += cost;
-  return true;
+  return { ok: true };
 }
 
 
 // 突破実績の多いIPはPoWを重くする(自動化のコストを段階的に上げる)
-function powBitsFor(ip) {
+function powBitsFor(ip, exempt) {
+  if (exempt) return POW_BITS; // ローカル検証では難易度を上げない
   const solved = ipSolved.get(ip) || 0;
   const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / 3));
   return POW_BITS + extra;
@@ -872,6 +884,32 @@ function pickDiverse(pool, count, sets, already, srcOf, usedSrc) {
   return chosen;
 }
 
+// 出題生成の同時実行数。booru API と ffmpeg を叩くので、無制限に並走させると
+// 自分のリソースで詰まって 502(問題を準備できませんでした)が多発する
+// (実測: 同時130発で68件が502)。上限を設けて順番に処理し、待ちすぎたら 503 を返す。
+const MAKE_CONCURRENCY = Number(process.env.MAKE_CONCURRENCY || 4);
+let makeRunning = 0;
+const makeQueue = [];
+
+async function withMakeSlot(fn) {
+  if (makeRunning >= MAKE_CONCURRENCY) {
+    if (makeQueue.length >= MAKE_CONCURRENCY * 8) {
+      const err = new Error("busy");
+      err.busy = true;
+      throw err;
+    }
+    await new Promise((res, rej) => makeQueue.push({ res, rej }));
+  }
+  makeRunning++;
+  try {
+    return await fn();
+  } finally {
+    makeRunning--;
+    const next = makeQueue.shift();
+    if (next) next.res();
+  }
+}
+
 async function makeChallenge() {
   // フィルタを段階的に緩める(厳しいフィルタで出題できない場合に品質より可用性を優先)。
   // 段階0=厳しい(スクショ除外+タグ数制限) / 1=スクショ除外のみ / 2=制限なし+候補条件も緩和
@@ -1209,16 +1247,53 @@ function clientIp(req) {
   return req.headers["x-real-ip"] || req.socket.remoteAddress || "local";
 }
 
-function checkQuota(ip) {
+// ローカル/プライベートIPか(開発・検証は制限しない)
+function isLocalIp(ip) {
+  const s = String(ip || "");
+  if (!s) return true;
+  if (s === "local" || s === "::1" || s === "127.0.0.1" || s.startsWith("127.")) return true;
+  if (s.startsWith("::ffff:127.")) return true;
+  if (s.startsWith("192.168.") || s.startsWith("10.") || s.startsWith("::ffff:192.168.") || s.startsWith("::ffff:10.")) return true;
+  // 172.16.0.0/12
+  const m = s.match(/^(?:::ffff:)?172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  if (s.startsWith("fc") || s.startsWith("fd") || s.startsWith("fe80:")) return true; // ULA / リンクローカル
+  return false;
+}
+
+// トークンバケット方式のレート制限。超過時は「何秒待てば再開できるか」も返す。
+// ⚠️ ローカル除外は「プロキシを経由していない」ことが条件。
+//    X-Forwarded-For が付いている = 外部のクライアントがリバースプロキシ越しに来ているので、
+//    除外すると本番で無制限になってしまう(プロキシがlocalhostから転送してくるため)。
+// 「開発・検証のローカルアクセスか」。プロキシ経由(X-Forwarded-For付き)は除外しない。
+function isExemptRequest(req) {
+  if (!IP_QUOTA_EXEMPT_LOCAL) return false;
+  const forwarded = !!req.headers["x-forwarded-for"] || !!req.headers["x-real-ip"];
+  if (forwarded) return false;
+  return isLocalIp(clientIp(req)) || isLocalIp(req.socket && req.socket.remoteAddress);
+}
+
+function checkQuota(req) {
+  if (isExemptRequest(req)) return { ok: true, remaining: Infinity, retryAfterMs: 0, exempt: true };
+  const ip = clientIp(req);
   const now = Date.now();
-  const c = ipCounts.get(ip);
-  if (!c || now >= c.resetAt) {
-    ipCounts.set(ip, { n: 1, resetAt: now + IP_WINDOW_MS });
-    return true;
+  let b = ipCounts.get(ip);
+  if (!b) {
+    b = { tokens: IP_QUOTA, last: now };
+    ipCounts.set(ip, b);
+  } else {
+    // 経過時間に応じてトークンを補充する(上限 IP_QUOTA)
+    const gained = Math.floor((now - b.last) / IP_REFILL_MS);
+    if (gained > 0) {
+      b.tokens = Math.min(IP_QUOTA, b.tokens + gained);
+      b.last += gained * IP_REFILL_MS;
+    }
   }
-  if (c.n >= IP_QUOTA) return false;
-  c.n += 1;
-  return true;
+  if (b.tokens < 1) {
+    return { ok: false, remaining: 0, retryAfterMs: Math.max(1000, b.last + IP_REFILL_MS - now) };
+  }
+  b.tokens -= 1;
+  return { ok: true, remaining: b.tokens, retryAfterMs: 0 };
 }
 
 // ---------- HTTP ----------
@@ -1228,6 +1303,24 @@ const MIME = {
   ".js": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
 };
+
+// 429 は「いつ再開できるか」を必ず添える(待ち時間が分からないとユーザーは詰む)。
+// UX的には st429 とクライアントの文言を固定する。
+function sendTooMany(res, retryAfterMs, extra) {
+  const sec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  const body = Object.assign(
+    { error: `リクエストが多すぎます。あと約${sec}秒で再開できます`, retryAfterMs, retryAfterSec: sec },
+    extra || {}
+  );
+  const text = JSON.stringify(body);
+  res.writeHead(429, {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "cache-control": "no-store",
+    "retry-after": String(sec),
+  });
+  res.end(text);
+}
 
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -1324,9 +1417,8 @@ async function handleApi(req, res, url) {
   // 出題
   if (url.pathname === "/api/challenge" && req.method === "GET") {
     const ip = clientIp(req);
-    if (!checkQuota(ip)) {
-      return sendJson(res, 429, { error: "リクエストが多すぎます。しばらく待ってから再試行してください" });
-    }
+    const q = checkQuota(req);
+    if (!q.ok) return sendTooMany(res, q.retryAfterMs);
     sweep();
     // 同一IPの古い出題は「多すぎる分だけ」捨てる。
     // 全部消すと、別タブや複数人が同じIP(NAT)から使った時に
@@ -1338,13 +1430,22 @@ async function handleApi(req, res, url) {
       const old = mine.shift();
       challenges.delete(old.id);
     }
-    const c = await makeChallenge();
+    let c;
+    try {
+      c = await withMakeSlot(() => makeChallenge());
+    } catch (e) {
+      if (e && e.busy) {
+        // 混雑で処理しきれない場合は、待ち時間を示して再試行してもらう
+        return sendTooMany(res, 3000, { error: "アクセスが集中しています。あと約3秒で再開できます" });
+      }
+      throw e;
+    }
     if (!c) {
       return sendJson(res, 502, { error: "問題を準備できませんでした。少し待ってからもう一度お試しください" });
     }
     c.ip = ip;
     // PoW課題(この出題専用)とチケット(トークン束縛用)を発行
-    c.powBits = powBitsFor(ip);
+    c.powBits = powBitsFor(ip, q.exempt); // ローカル検証では難易度を上げない
     c.pow = randomBytes(16).toString("hex");
     c.powSalt = randomBytes(16).toString("hex"); // scrypt用ソルト(毎回ランダム)
     c.ticket = newTicket(ip);
@@ -1377,9 +1478,8 @@ async function handleApi(req, res, url) {
   // 回答検証(全層を通過した時だけワンタイム解決トークンを発行)
   if (url.pathname === "/api/verify" && req.method === "POST") {
     const ip = clientIp(req);
-    if (!checkQuota(ip)) {
-      return sendJson(res, 429, { error: "リクエストが多すぎます。しばらく待ってから再試行してください" });
-    }
+    const q = checkQuota(req);
+    if (!q.ok) return sendTooMany(res, q.retryAfterMs, { ok: false });
     const body = await readBody(req);
     const id = String(body?.id || "");
     const selected = Array.isArray(body?.selected) ? body.selected.map(String) : [];
@@ -1432,11 +1532,13 @@ async function handleApi(req, res, url) {
     }
 
     // --- 層3b: PoW仕事量の予算(計算資源で突破されても総量を頭打ちにする) ---
-    if (!chargeWork(ip, c.powBits)) {
+    const wq = chargeWork(ip, c.powBits, q.exempt);
+    if (!wq.ok) {
       challenges.delete(id);
-      return sendJson(res, 429, {
+      // 「しばらく待って」ではなく具体的な待ち時間を返す(ブラウザ側でカウントダウンできる)
+      return sendTooMany(res, wq.retryAfterMs, {
         ok: false,
-        error: "計算認証の試行量が上限に達しました。しばらく待ってから再試行してください",
+        error: `計算認証の試行量が上限に達しました。あと約${Math.max(1, Math.ceil(wq.retryAfterMs / 1000))}秒で再開できます`,
         expired: true,
       });
     }
