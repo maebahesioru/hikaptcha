@@ -121,27 +121,19 @@
       box.textContent = "";
       box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
 
-      // お手本画像(タグ名は出さない): 同じ種類の画像を下のグリッドから選ぶ
-      if (ch && ch.sampleUrl && !busy) {
+      // お題タグを出題(画像を見て「◯◯の画像」を全部選ぶ)
+      if (ch && ch.prompt && !busy) {
         const p = el("p", "hkc-prompt");
-        p.appendChild(document.createTextNode("下の"));
+        p.appendChild(document.createTextNode("下の画像の中から「"));
+        const b = el("b");
+        b.textContent = ch.prompt;
+        p.appendChild(b);
+        p.appendChild(document.createTextNode("」の画像を"));
         const all = el("b", "all");
-        all.textContent = "お手本";
+        all.textContent = "全部";
         p.appendChild(all);
-        p.appendChild(document.createTextNode("の画像と同じ種類の画像を"));
-        const all2 = el("b", "all");
-        all2.textContent = "全部";
-        p.appendChild(all2);
         p.appendChild(document.createTextNode("選んでください"));
         box.appendChild(p);
-        const smp = el("div", "hkc-sample");
-        const simg = document.createElement("img");
-        simg.referrerPolicy = "no-referrer"; // ホットリンク対策
-        simg.src = ch.sampleUrl;
-        simg.alt = "お手本";
-        simg.draggable = false;
-        smp.appendChild(simg);
-        box.appendChild(smp);
       }
 
       if (!ch) {

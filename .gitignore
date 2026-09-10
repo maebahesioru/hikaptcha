@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+# 辞書ビルド用の作業環境・辞書データ(サイズ大・再生成可能)
+tools/.venv/
+tools/common_nouns.json
+tools/all_nouns.json
