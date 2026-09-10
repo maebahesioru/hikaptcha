@@ -73,38 +73,65 @@ function shuffle(arr) {
   return a;
 }
 
-// ---------- 出題生成(ランダム画像 + 辞書検証済みタグ) ----------
-// 方針:
-//  - 画像は毎回ランダムなバッチ(出題のバラエティを担保)
-//  - お題タグは、そのバッチに付いているタグのうち allowed_tags.json に載っているものだけ
-//    allowed_tags.json = hikabooruの全タグ(10,806件)を
-//      「JMdict(日本語辞書)の常用名詞」+「UniDicで 名詞/普通名詞/一般 と判定」
-//    で検証して残った“画像を見て判別できる一般名詞”だけの集合(辞書から自動生成・手選定ではない)
-//    → 造語(ポヴ/バウティー)・動作性名詞(変換/送信)・形状詞(安全/透明)・
-//      固有名詞・抽象語・構図/UI語を原理的に排除できる
-//  - 直近で使ったタグは避けて単調さを防ぐ
+// ---------- お題タグの選別 ----------
+// hikabooruのタグはメタ/文の断片/謎タグだらけ。
+// 「画像を見て人間が解けるタグ」だけを通す厳しめフィルタ:
+//   - 日本語(カタカナ/漢字)を含む短いタグ(2〜10文字)
+//   - 数字・句読点始まり・メタ語(構図/技術/依頼系)を除外
+//   - ひらがな終端(助詞/活用形: 「黒地に」等)を除外
+//   - ひらがな3文字以上連続しうる文系(キャプション)を除外
+//   - 使用回数が10〜3000(低すぎ=ノイズ/高すぎ=メタ)
 
-const ALLOWED =
-  (() => {
-    try {
-      const arr = JSON.parse(readFileSync(path.join(__dirname, "allowed_tags.json"), "utf8"));
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch {
-      return new Set();
-    }
-  })();
-if (ALLOWED.size < 50) {
-  console.error("allowed_tags.json が読めません。先に tools/build_allowlist.py を実行してください");
-  process.exit(1);
+const HAS_JP = /[\u3040-\u30ff\u3400-\u9fff]/;
+const HAS_KATAKANA_OR_KANJI = /[\u30a1-\u30f6\u3400-\u9fff]/;
+const HAS_NUM = /[0-9０-９]/;
+const HIRA = /[\u3040-\u309f]/;
+const JUNK_START = /^[、。，「」（）()・\s\-_/\\@]/;
+const HIRA_TAIL = /[\u3040-\u309f]$/; // ひらがな終端=助詞/活用形の可能性大
+const META_TAG = /上半身|バスト|胸像|クロースアップ|クローズアップ|全身|ポートレート|被写界深度|フレーム|コマ|ツイート|スクリーンショット|ハイレゾ|アルバム|タイムスタンプ|記号|テキスト|キャプション|字幕|ウェブ|アップロード|ダウンロード|チャンネル|ユーザー|ID|ロゴ|アイコン|ライブ|リフレクション|背景|動画|著作権|完成|日常|シンボル|スタンプ|スクショ/;
+const JUNK_TAG = [
+  /^[\d０-９]+$/,
+  /^[0-9a-z]{1,3}$/i,
+  /[()（）]/,
+  /user/i,
+  /https?:|www\.|\.com|\.net|youtube|pixiv/i,
+  /@/,
+  /^[\s\-_/\\]+$/,
+];
+const STOP_TAG = /ください|チェック|翻訳|依頼|解説|説明|聞いてみ|なので|じゃない|です|ます|ました|じゃん|ってしま|どうぞ|の巻|つけよう/;
+// 広すぎる/抽象的すぎるタグ(ほぼ全画像につく等)はお題にしない
+const EXCLUDE_TAGS = new Set([
+  "男性", "女性", "実写", "現実の生活", "現実的で", "写真背景", "複数の視点",
+  "字幕", "ミーム", "おじいちゃん向けコンテンツ", "なんだって", "食べ物",
+  "1人の少年", "2人の男児", "立ち姿", "人物", "人々", "人間の", "子供", "少女",
+  "少年", "動物", "日本人", "オタク", "カジュアル", "服", "衣服", "髪", "目",
+  "顔", "手", "靴", "建物", "街", "家",
+]);
+
+function usableTag(t) {
+  if (!t || t.length < 2) return false;
+  if (!HAS_JP.test(t)) return false;
+  return !JUNK_TAG.some((re) => re.test(t));
 }
 
-// 直近で出題したタグ(同じタグが続かないようにする)
-const RECENT_TAGS = [];
-const RECENT_MAX = 60;
-function markUsed(tag) {
-  RECENT_TAGS.push(tag);
-  while (RECENT_TAGS.length > RECENT_MAX) RECENT_TAGS.shift();
+function questionableTag(t, usages) {
+  if (!usableTag(t)) return false;
+  const n = Number(usages) || 0;
+  if (n < 10 || n > 3000) return false; // ノイズ/メタ排除
+  if (t.length > 10) return false;
+  if (HAS_NUM.test(t)) return false; // 年号・数字入りを排除
+  if (JUNK_START.test(t)) return false; // 句読点/記号始まり
+  if (/\s/.test(t)) return false; // 空白入りはクエリ区切りと解釈される
+  if (EXCLUDE_TAGS.has(t)) return false;
+  if (!HAS_KATAKANA_OR_KANJI.test(t)) return false; // ひらがなのみ除外
+  if (HIRA_TAIL.test(t)) return false; // 「黒地に」等の助詞/活用終端を除外
+  if (META_TAG.test(t)) return false; // 構図/技術/メタ語
+  if (STOP_TAG.test(t)) return false;
+  if (HIRA.test(t) && (HIRA.test(t.slice(-2, -1)) || (t.match(/[\u3040-\u309f]/g) || []).length >= 3)) return false; // 文系キャプション
+  return true;
 }
+
+// ---------- 出題生成 ----------
 
 // タイルは正方形なので、極端な縦長/横長(9:16未満・16:9超)は
 // 表示したときに小さく/切れて判別不能になる → 出題から除外
@@ -116,44 +143,46 @@ function goodAspect(p) {
   return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
 }
 
-// ランダムなoffset位置からsafe画像を1バッチ引く(タグ名も返す)
 async function fetchRandomImageBatch(limit) {
   const offset = Math.floor(Math.random() * 29500);
   const q = encodeURIComponent("safety:safe type:image");
   const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
   return (d?.results || [])
     .filter((p) => p && p.id && p.thumbnailUrl && goodAspect(p))
-    .map((p) => ({
-      id: p.id,
-      url: absUrl(p.thumbnailUrl),
-      tags: new Set((p.tags || []).map((t) => (t.names && t.names[0]) || "").filter(Boolean)),
-    }));
+    .map((p) => {
+      // タグ名とその使用回数(ノイズ/メタ判定に使う)を保持
+      const tagU = new Map();
+      for (const x of p.tags || []) {
+        const name = (x.names && x.names[0]) || "";
+        if (name) tagU.set(name, x.usages || 0);
+      }
+      return {
+        id: p.id,
+        url: absUrl(p.thumbnailUrl),
+        tags: new Set(tagU.keys()),
+        tagU,
+      };
+    });
 }
 
 async function makeChallenge() {
-  for (let i = 0; i < 30; i++) {
-    const batch = await fetchRandomImageBatch(24);
+  for (let i = 0; i < 12; i++) {
+    const batch = await fetchRandomImageBatch(16);
     if (batch.length < GRID_SIZE) continue;
 
-    // バッチ内タグの登場回数(辞書検証済みタグのみ)
     const counts = new Map();
     for (const p of batch) {
       for (const t of p.tags) {
-        if (!ALLOWED.has(t)) continue;
+        const usages = p.tagU.get(t) || 0;
+        if (!questionableTag(t, usages)) continue;
         counts.set(t, (counts.get(t) || 0) + 1);
       }
     }
-
-    // 2〜3枚に付くタグがお題候補(正解が絞られていて、かつ多すぎない)
-    let candidates = [];
+    const candidates = [];
     for (const [tag, n] of counts) {
-      if (n >= 2 && n <= 3) candidates.push({ tag, n });
+      if (n >= 2 && n <= 4) candidates.push({ tag, n });
     }
     if (!candidates.length) continue;
-
-    // 直近使ったタグは避ける(候補が全部最近なら仕方なく使う)
-    const fresh = candidates.filter((c) => !RECENT_TAGS.includes(c.tag));
-    if (fresh.length) candidates = fresh;
 
     // 重み付きランダム選択(出現数が多い方をやや優先)
     const roulette = [];
@@ -161,7 +190,6 @@ async function makeChallenge() {
     const tag = roulette[Math.floor(Math.random() * roulette.length)];
     const tagCount = counts.get(tag) || 2;
 
-    // 正解=お題タグが付く画像(2〜3枚) / ダミー=同じバッチ内でお題タグが付かない画像
     const targets = batch.filter((p) => p.tags.has(tag)).slice(0, tagCount);
     const rest = batch.filter((p) => !p.tags.has(tag));
     if (rest.length < GRID_SIZE - targets.length) continue;
@@ -182,7 +210,6 @@ async function makeChallenge() {
       })),
     ]);
 
-    markUsed(tag);
     return {
       id: randomBytes(8).toString("hex"),
       prompt: tag,

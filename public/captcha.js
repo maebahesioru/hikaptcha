@@ -30,24 +30,6 @@
     .hkc-prompt { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: #d4d4d8; }
     .hkc-prompt b { color: #7dd3fc; }
     .hkc-prompt .all { color: #fcd34d; }
-    .hkc-sample {
-      margin: 0 0 12px;
-      display: flex;
-      justify-content: center;
-      padding: 10px;
-      background: #0c0c0e;
-      border: 1px dashed #52525b;
-      border-radius: 10px;
-    }
-    .hkc-sample img {
-      max-width: 210px;
-      max-height: 210px;
-      object-fit: contain;
-      border: 2px solid #fcd34d;
-      border-radius: 8px;
-      background: #000;
-      display: block;
-    }
     .hkc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .hkc-tile {
       position: relative;
@@ -121,7 +103,6 @@
       box.textContent = "";
       box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
 
-      // お題タグを出題(画像を見て「◯◯の画像」を全部選ぶ)
       if (ch && ch.prompt && !busy) {
         const p = el("p", "hkc-prompt");
         p.appendChild(document.createTextNode("下の画像の中から「"));
