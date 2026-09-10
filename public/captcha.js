@@ -43,15 +43,26 @@
       overflow: hidden;
       background: #000;
       cursor: pointer;
-      /* 配信画像を3:2に揃えているので、タイルも3:2にして余白をなくす */
+      /* 配信画像をクロップせず contain で見せるので、タイルは 3:2 */
       aspect-ratio: 3 / 2;
       display: block;
       transition: border-color .12s, opacity .12s;
     }
-    .hkc-tile img {
+    /* 背景: 同じ画像を拡大+ぼかして敷き、余白を黒帯ではなく自然に見せる */
+    .hkc-tile .hkc-bg {
+      position: absolute;
+      inset: 0;
       width: 100%; height: 100%;
-      /* 配信側で3:2にクロップ済みなので cover でタイル全面を埋める */
       object-fit: cover;
+      filter: blur(10px) brightness(0.55) saturate(1.2);
+      transform: scale(1.15);
+      display: block;
+    }
+    /* 前景: 画像全体を切らずに表示(これが本物のタイル) */
+    .hkc-tile .hkc-fg {
+      position: relative;
+      width: 100%; height: 100%;
+      object-fit: contain;
       display: block;
     }
     .hkc-tile:hover { border-color: #71717a; }
@@ -288,7 +299,18 @@
         const btn = el("button", "hkc-tile");
         btn.type = "button";
         btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
+        // 背景(ぼかし)と前景(全体表示)の2枚でタイルを作る。
+        // クロップしないので被写体が端で切れず、余白はぼかしで自然に埋まる。
+        const bg = document.createElement("img");
+        bg.className = "hkc-bg";
+        bg.referrerPolicy = "no-referrer";
+        bg.src = t.url;
+        bg.alt = "";
+        bg.draggable = false;
+        bg.setAttribute("aria-hidden", "true");
+        btn.appendChild(bg);
         const img = document.createElement("img");
+        img.className = "hkc-fg";
         img.referrerPolicy = "no-referrer";
         img.src = t.url;
         img.alt = "";

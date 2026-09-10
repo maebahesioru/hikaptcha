@@ -1,0 +1,395 @@
+[
+ {
+  "idx": 0,
+  "prompt": "ノートパソコン × バッグ",
+  "tags": [
+   "ノートパソコン",
+   "バッグ"
+  ],
+  "mode": "and",
+  "targetCount": 1,
+  "tiles": [
+   {
+    "id": "1d3a7d1a0d34",
+    "url": "http://localhost:3108/api/img/8c6bc129db31dca6710ded22",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29235_86Np7OzA__wDhTCzryWYo14DWnZ-2lcQQQGy07TzqmY.jpg"
+   },
+   {
+    "id": "9b961aeca1e0",
+    "url": "http://localhost:3108/api/img/c42e971f8e7929b68acf8cb3",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29250_K6_6LSgl5LWtzUVRINSprygsqEVNs9KyNBhzWeRzxxM.jpg"
+   },
+   {
+    "id": "4529909bff62",
+    "url": "http://localhost:3108/api/img/e3e88a1246a737cfaa862a40",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29247_ExgJYdc-fJrhWiqcKibAPLDPK4W8ddryW7mRp7IdibQ.jpg"
+   },
+   {
+    "id": "f33acf17710e",
+    "url": "http://localhost:3108/api/img/a6756a38a9c77cb3834d96cb",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29244_SThpa-ay80Hp6lijff6LxKKsI56yUuZoCMFy6Xg3tn0.jpg"
+   },
+   {
+    "id": "d9330d417dec",
+    "url": "http://localhost:3108/api/img/8da8c3ee07288382b2721c1e",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29248_hZfzqVA2K9nT3BDsexWrmzkFjGaHTtnXeD5p2PB2Es4.jpg"
+   },
+   {
+    "id": "cc7a293e90e0",
+    "url": "http://localhost:3108/api/img/4c9e070a9c3e59a3071c787f",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29237_AVi08Ecso3JhYZhyvh46fqgC7N2R39u8tF-yEQUg8oI.jpg"
+   },
+   {
+    "id": "872b3a63939f",
+    "url": "http://localhost:3108/api/img/f3ce65067ed7e13314a802a3",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29242_skZ3ajiLHVsYTQhLNT_HM3_KsXrGtpEP8vqUk0SBSwI.jpg"
+   },
+   {
+    "id": "7785560025ad",
+    "url": "http://localhost:3108/api/img/9352d966292cef3776e3bb18",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29234_OZ5BgNQ25UgO6a2gXe3sUvbpGD3XnQcJuysNsu9BjG4.jpg"
+   },
+   {
+    "id": "d045395f4f87",
+    "url": "http://localhost:3108/api/img/880a02eee76577ed9c0c7cb4",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29236_2fSYyWuHcV-j-E1xECyJwqi-UJpW0Aw_wFrFMLT6PK0.jpg"
+   }
+  ]
+ },
+ {
+  "idx": 1,
+  "prompt": "金髪",
+  "tags": [
+   "金髪"
+  ],
+  "mode": "single",
+  "targetCount": 4,
+  "tiles": [
+   {
+    "id": "0ce34f98a4fe",
+    "url": "http://localhost:3108/api/img/56d6a15367b7ce58a1a5ad23",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14059_fbzsq8dUJimWNyqZbrG86UVoVo-NAnO5LdXvLvDW5fc.jpg"
+   },
+   {
+    "id": "893c4cc04950",
+    "url": "http://localhost:3108/api/img/ead262bd56cdd518ce087645",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14071_179qGpU4qnKF3AS8bVd8PxCfSteMzu3uvprMj3MzG2E.jpg"
+   },
+   {
+    "id": "b70a26739c08",
+    "url": "http://localhost:3108/api/img/76740a4f3f26054091a8a735",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14064_lRAH4zhql9SXoJ2bE1OloZuxxr9qxUEpdFf8Y59Waxc.jpg"
+   },
+   {
+    "id": "94343d635d32",
+    "url": "http://localhost:3108/api/img/3b9fe7f31a632913802c3d9f",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14069_c-Qoi9vwlagiodYLs6F7as3ReF9ML2kCDby-C4pqQhM.jpg"
+   },
+   {
+    "id": "0c299ef0e061",
+    "url": "http://localhost:3108/api/img/5f38e6a0a21dd406384c9b61",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14070_9QgpmC3vcPOaxdtUm5Xhxsti56AWh5vrpPehNIMK6Ks.jpg"
+   },
+   {
+    "id": "6b3bbc8e12ef",
+    "url": "http://localhost:3108/api/img/5110449df00796a7556b08c6",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14075_Fj5a3tEvqRq10Iz5DNx54cWZjGar7b6cgeq8hrlnliM.jpg"
+   },
+   {
+    "id": "94c2d0d754bc",
+    "url": "http://localhost:3108/api/img/e2f03b93688a54ddfc7879b9",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14063_Ajzf551dCNeUKAY49DTBFFVktEoy_CmpaKu0FuY-zWA.jpg"
+   },
+   {
+    "id": "e4ddad499609",
+    "url": "http://localhost:3108/api/img/d1faf75cecbe247762bd7446",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14073_wZ02zlUExlP7uvFHIX9aV1RE774xs0k7kuYrtLAX7nA.jpg"
+   },
+   {
+    "id": "02b6f4e5bc85",
+    "url": "http://localhost:3108/api/img/ad5e39e4a4c967c39b1d6245",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/01/14057_56Nv9e-CbZDNkS4RY3K7nOB_VrbUGX2bEjWVLt01v3k.jpg"
+   }
+  ]
+ },
+ {
+  "idx": 2,
+  "prompt": "東方Project",
+  "tags": [
+   "東方Project"
+  ],
+  "mode": "single",
+  "targetCount": 4,
+  "tiles": [
+   {
+    "id": "66ed6c96c90c",
+    "url": "http://localhost:3108/api/img/4fb5df81fe3ae883bd81ae43",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2730_tASccDoALyzTmYqUdk4CAjjJRYIcqG25FBYTcAMLbBM.jpg"
+   },
+   {
+    "id": "aaad7987abe0",
+    "url": "http://localhost:3108/api/img/c28348a144dcdde45507e955",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2728_vSQOjZTq7JH0LKjypBzFqctK29s_2icpqNuGMj-nEdg.jpg"
+   },
+   {
+    "id": "3fe1d10d36b2",
+    "url": "http://localhost:3108/api/img/8ff1d5254df3c69b6732fac5",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2725_SqDnUsUYQ46oNgXt2PW_d3sZryyZfxeizNRatxIfVkI.jpg"
+   },
+   {
+    "id": "ca523268b9af",
+    "url": "http://localhost:3108/api/img/c18d0e3443682049c48640f3",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2718_NbXWLlj1ktb6ENOOkFO4N8fDnKDe2_uHOPksy22cKXs.jpg"
+   },
+   {
+    "id": "82c621231fa9",
+    "url": "http://localhost:3108/api/img/8f58e186a9fb4663dc322884",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2717_gw0W7UzYS0xLy38DJJj35pPPep_In2KIA1q6dyU0maw.jpg"
+   },
+   {
+    "id": "444d320bc49a",
+    "url": "http://localhost:3108/api/img/14535d5f388ba451d8ff2b78",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2722_cyJyeMwptBoYHD6PJg-lVoM5SDP795yvmWzXkQZn7js.jpg"
+   },
+   {
+    "id": "678a5b89384b",
+    "url": "http://localhost:3108/api/img/2d3b839ead7acb6b54db8e87",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2713_iSgfzNKdVFF70_jplk5ZrroJS_YdgJczw4T31q4oBF8.jpg"
+   },
+   {
+    "id": "48c43c1f452f",
+    "url": "http://localhost:3108/api/img/a4586f25a45dec332c50a8b8",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2719_gcxxj6Sb-XOUHp_9-u8o2GaugYcw2xh7irnzuqXYmcg.jpg"
+   },
+   {
+    "id": "86369ddb2e54",
+    "url": "http://localhost:3108/api/img/743ab3a44c5347100f876580",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2721_7LKLeRQVg980fbmHtf601R0GbMhTnxQ-tGKx_CyCzbQ.jpg"
+   }
+  ]
+ },
+ {
+  "idx": 3,
+  "prompt": "ドット絵 × ネタ画像",
+  "tags": [
+   "ドット絵",
+   "ネタ画像"
+  ],
+  "mode": "and",
+  "targetCount": 2,
+  "tiles": [
+   {
+    "id": "d453673b7b28",
+    "url": "http://localhost:3108/api/img/c1344bbeecc4b6644f4ec814",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2331_goD_sKvCkCXsVPmknPsJnERmI8eb_QUUeKrN5mCJ9OE.jpg"
+   },
+   {
+    "id": "d88f1781d5da",
+    "url": "http://localhost:3108/api/img/f3eccf3a6e2f39103faf65cb",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2323_IlZac4KapHXKSppm994MDa8zPbas9Sw-h4Ep5bBUeWo.jpg"
+   },
+   {
+    "id": "961ab604eb30",
+    "url": "http://localhost:3108/api/img/577a4aec9903ad5ec44ceafb",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2330_aTmakZxcQCB7VOMefZoXqBbbe1pzu0X4lH0DZjdFRhY.jpg"
+   },
+   {
+    "id": "947bc9ee28bf",
+    "url": "http://localhost:3108/api/img/3308ab003f769aae6d5c250d",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2329_Ur-PBBBDoRq4af8iyeQQEYM34-FK71uY4EQcQxRBGBU.jpg"
+   },
+   {
+    "id": "0f3aa5b14e60",
+    "url": "http://localhost:3108/api/img/67df0f9df5d58d41ad83ebd6",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2339_OjlaeK8Iyd4ut-mIzUZh9yWqWjOj4WaLojqt4s8_ETI.jpg"
+   },
+   {
+    "id": "1cded82a0712",
+    "url": "http://localhost:3108/api/img/1e631c59421c6798601b4f36",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2316_Orm2VKyjG2LN4krn6lJn9YRoa8-RdjQH-NINoEtwldM.jpg"
+   },
+   {
+    "id": "1b8eab3f0409",
+    "url": "http://localhost:3108/api/img/5b831f25aadc5c5524d858b0",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2326_J-OIIDkhwzURwAyP7O2Nz-hrrqOsmZnagv4xLm-TMow.jpg"
+   },
+   {
+    "id": "d93fa0ffd6cc",
+    "url": "http://localhost:3108/api/img/bc84eb35227fbbf003a40ec8",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2327_OnVKcv5HQ9f3191VZZcVccrzizkIJgSfh3PZUP1yZhU.jpg"
+   },
+   {
+    "id": "fca1cac9ca46",
+    "url": "http://localhost:3108/api/img/c82369d5348d7899833419f0",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/00/2332_Nsvr9a5cqRtl5yS8IKM7S_IWgUXk_jQz08tgBXh497A.jpg"
+   }
+  ]
+ },
+ {
+  "idx": 4,
+  "prompt": "ヘッドバンド × 半袖",
+  "tags": [
+   "ヘッドバンド",
+   "半袖"
+  ],
+  "mode": "and",
+  "targetCount": 2,
+  "tiles": [
+   {
+    "id": "c0cae916d37c",
+    "url": "http://localhost:3108/api/img/77b47e66a85f62b67454dcd0",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59053_Y0TxEpqchbhW6rkX6Hbg9mfTBEVIIG4d4JqU0udXOY0.jpg"
+   },
+   {
+    "id": "fdf4e1b94a9e",
+    "url": "http://localhost:3108/api/img/cf0ad9e1eb79c97b178809f0",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59057_-M8GpazEvt3t0oHI8N6-7Xrp4jpw0vmjxo9jqHqKcs0.jpg"
+   },
+   {
+    "id": "d2d66ba09ce0",
+    "url": "http://localhost:3108/api/img/8f35ab6775c9ad3b17fc6798",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59042_SV1yLiLugqFgN7urpSubitmJGlFLE9Cx5NOhoVPQPow.jpg"
+   },
+   {
+    "id": "b9f3b84dd22f",
+    "url": "http://localhost:3108/api/img/51dfc0b6302402c760872b5a",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59052_FoMwbwrstJEY6sTzJJXBzbjtmZ8LVI79QIdCaaooWQw.jpg"
+   },
+   {
+    "id": "2bfa668921a5",
+    "url": "http://localhost:3108/api/img/0f1560f8c280775e6b62cb87",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59059_bEPLnVNyGs1_qtAatXrSmGJdd5rZ2C-EVd7YBrO0jzI.jpg"
+   },
+   {
+    "id": "8a2211026969",
+    "url": "http://localhost:3108/api/img/8168c314fb4002b63ee4afb7",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59058_oJwDip0wb-Uu0vgmP_G1dyJkoq8t2Xd72rmOLgcpaao.jpg"
+   },
+   {
+    "id": "e29f689283b7",
+    "url": "http://localhost:3108/api/img/fa8f05abe77a1080a3c33008",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59046_u0G_PIO8FOAkw3lyYwIAkLKY13Li111bQJIhH9-NQH8.jpg"
+   },
+   {
+    "id": "5dfa320d84cd",
+    "url": "http://localhost:3108/api/img/5a35e830b38a4b5779051c62",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59056_tSwlSguCaiXHXsBQKQ7AJTIifOaAsu0ZDECqsObmCw4.jpg"
+   },
+   {
+    "id": "459d69253f62",
+    "url": "http://localhost:3108/api/img/2cd5b5527f0b221cfb949133",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/05/59043_C5jjlHLqxpC8emZkfF1u9FJy4DD3uDg8v93lLR8WyBc.jpg"
+   }
+  ]
+ },
+ {
+  "idx": 5,
+  "prompt": "スプーン",
+  "tags": [
+   "スプーン"
+  ],
+  "mode": "single",
+  "targetCount": 3,
+  "tiles": [
+   {
+    "id": "81055ffd2ff2",
+    "url": "http://localhost:3108/api/img/b41854fe94b1c8097bf6e3a2",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29932_Delw7tNwARcFN6f5H3IBApvUby9BZPKbdp5r3_Q9O3A.jpg"
+   },
+   {
+    "id": "564f1c933338",
+    "url": "http://localhost:3108/api/img/9cb78c6d050a3828ae0f8e91",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29921_G02H4tSc7bX_Ee3JocEruCnR5iCeV_sx6XWztEW5Pcc.jpg"
+   },
+   {
+    "id": "f1b395bf1eab",
+    "url": "http://localhost:3108/api/img/4e136057c3dd30710ac837d0",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29922_Oz9h1UPAvR0DagUYeVz9JZk3esaeKl5YC_l692GAqVo.jpg"
+   },
+   {
+    "id": "559cba8ba666",
+    "url": "http://localhost:3108/api/img/1d4657845a0fb3ffb1b53ef3",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29924_EtwaP2819IM70tJM_ttuCyltk8gf0Gd33PCKC7USk7E.jpg"
+   },
+   {
+    "id": "d3fd77907926",
+    "url": "http://localhost:3108/api/img/fbbc1749455e1d825753885d",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29930_O_A7rDQ_PjUE3NGjqlErtL_CqVvotgqdD4B_9gpAFlI.jpg"
+   },
+   {
+    "id": "2bf9c5590b26",
+    "url": "http://localhost:3108/api/img/ffa542a84d5316ad0aac4079",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29927_occ2OY7SobW2EOqT3by_qNJmlrKiup6ONmS_OdjHqXY.jpg"
+   },
+   {
+    "id": "db054cea3319",
+    "url": "http://localhost:3108/api/img/e386f3ebb06abe490c568969",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29931_ydHKfqC_4x17BMLpmmiOGlWlBC2-XAJ0XG9PI6VW6xc.jpg"
+   },
+   {
+    "id": "de5f7aeb2875",
+    "url": "http://localhost:3108/api/img/6091e82b893f141a57abd9a2",
+    "target": true,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29937_OAuqScthktrhcYKgT3EYi9h8zcRWMap3hVBJhVVHppw.jpg"
+   },
+   {
+    "id": "0d8b72d19323",
+    "url": "http://localhost:3108/api/img/e099eee2fa7e7d6af4bbcfec",
+    "target": false,
+    "originalUrl": "https://hikabooru.hikamers.app/data/generated-thumbnails/000000/02/29928_wq1oGUxxcrsmXAKtMxoMjqBQNfUxBxSnjACydvazSac.jpg"
+   }
+  ]
+ }
+]

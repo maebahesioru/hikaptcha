@@ -1,0 +1,38 @@
+[
+ {
+  "n": 0,
+  "prompt": "チーズ × バナナ",
+  "mode": "and",
+  "targets": 3,
+  "out": "C:\\Users\\maeba\\Desktop\\hikamani-captcha\\tag_audit\\case0.jpg",
+  "truth": "左上=ダミー 上中=正解 右上=正解 左中=ダミー 中央=ダミー 右中=正解 左下=ダミー 下中=ダミー 右下=ダミー",
+  "imagesOk": 9
+ },
+ {
+  "n": 1,
+  "prompt": "カービー",
+  "mode": "single",
+  "targets": 2,
+  "out": "C:\\Users\\maeba\\Desktop\\hikamani-captcha\\tag_audit\\case1.jpg",
+  "truth": "左上=ダミー 上中=正解 右上=ダミー 左中=ダミー 中央=ダミー 右中=ダミー 左下=ダミー 下中=ダミー 右下=正解",
+  "imagesOk": 9
+ },
+ {
+  "n": 2,
+  "prompt": "ガラス",
+  "mode": "single",
+  "targets": 5,
+  "out": "C:\\Users\\maeba\\Desktop\\hikamani-captcha\\tag_audit\\case2.jpg",
+  "truth": "左上=正解 上中=ダミー 右上=正解 左中=ダミー 中央=正解 右中=ダミー 左下=ダミー 下中=正解 右下=正解",
+  "imagesOk": 9
+ },
+ {
+  "n": 3,
+  "prompt": "タオル × 温泉",
+  "mode": "and",
+  "targets": 2,
+  "out": "C:\\Users\\maeba\\Desktop\\hikamani-captcha\\tag_audit\\case3.jpg",
+  "truth": "左上=ダミー 上中=ダミー 右上=ダミー 左中=ダミー 中央=ダミー 右中=ダミー 左下=正解 下中=正解 右下=ダミー",
+  "imagesOk": 9
+ }
+]

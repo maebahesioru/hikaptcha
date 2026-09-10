@@ -390,19 +390,15 @@ function concreteness(usages) {
 
 // ---------- 出題生成 ----------
 
-// タイルは 3:2(横長)で表示する。実測で、正方形タイル+contain では横長画像(多数派)の
-// 上下40%が余白になり、被写体がタイル面積の46%しか使えなかった。
-// 1.5付近の画像だけを選べば、タイルを余白なしで埋められる(被写体が約1.8倍の面積になる)
+// 配信は contain(クロップなし)なので、極端に細長い画像以外は受け入れる。
+// クロップをやめたので、以前のような「3:2付近しか使えない(全体の2.8%)」制約は不要。
 function goodAspect(p) {
   const w = Number(p.canvasWidth) || 0;
   const h = Number(p.canvasHeight) || 0;
   if (!w || !h) return false;
   const r = w / h;
-  return r >= 1.35 && r <= 1.85; // 3:2を中心に±20%程度(タイルに余白なしで収まる範囲)
+  return r >= 1.0 && r <= 2.2; // 正方形〜横長(タイル3:2にcontainで収まる範囲)
 }
-
-// 配信時の目標アスペクト比(タイルの 3:2 に合わせる)
-const TARGET_ASPECT = Number(process.env.TARGET_ASPECT || 1.5);
 
 // 画像プロキシ + 改変: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
 // 公開APIでタグを引いて正解を機械的に導出できてしまう。不透明IDに置き換えて中継する。
@@ -416,11 +412,8 @@ const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
 // 改変パラメータ(環境変数で調整可)
 const TRANSFORM = process.env.IMG_TRANSFORM !== "0"; // 0で無効化
-const PAD_PCT_MIN = Number(process.env.PAD_MIN || 8);
-const PAD_PCT_MAX = Number(process.env.PAD_MAX || 12);
-const CROP_PCT_MAX = Number(process.env.CROP_MAX || 3);
-const ROT_DEG_MAX = Number(process.env.ROT_MAX || 2.5);
-const JPEG_Q = Number(process.env.JPEG_Q || 3);
+const JPEG_Q = Number(process.env.JPEG_Q || 3); // 再圧縮品質
+const IMG_LONG_EDGE = Number(process.env.IMG_LONG_EDGE || 640); // 長辺のピクセル数
 
 let FFMPEG = null; // 遅延判定(無ければ改変せず素通し)
 function hasFfmpeg() {
@@ -439,11 +432,13 @@ const execFileP = promisify(execFile);
 const TMP = mkdtempSync(path.join(tmpdir(), "hkc-img-"));
 let tmpSeq = 0;
 
-// 改変: タイルの 3:2 に合わせて中央を(少しズラして)クロップし、
-// 反転・回転・ガンマ・再圧縮を重ねる。実測に基づく設計:
-//  - 余白(pad)は使わない → タイルを余白なしで埋められ、被写体が大きく見える
-//  - クロップは「構図をずらす」効果があり、pHashを動かしつつ被写体は拡大される
-//  - 反転は単独で距離が二桁動くが、反転を考慮する攻撃者には無効なので単独に頼らない
+// 改変の方針(実測に基づく):
+//  - クロップはしない(contain配信)。3:2に近い画像は全体の2.8%しかなく、
+//    無理にクロップすると被写体が端で切れて「見づらい」原因になる(実測で確認)
+//  - 反転は使わない。反転を考慮する攻撃者には距離0.2で無効(実測)なうえ、
+//    日本語テキストが鏡像になって読みにくくなる(見づらさの原因)
+//  - 回転も使わない(黒い三角が出る・幾何変換は適応的攻撃者に効かない)
+//  残るのは再圧縮と微小なガンマのみ。バイト一致は防げるが知覚索引には弱い(README参照)。
 async function transformImage(buf) {
   if (!TRANSFORM || !hasFfmpeg()) return null;
   const id = (tmpSeq = (tmpSeq + 1) % 100000);
@@ -452,26 +447,11 @@ async function transformImage(buf) {
   writeFileSync(inp, buf);
   const filters = [];
 
-  // 1) 目標アスペクト(3:2)へクロップ。中心から少しズラして構図を変える
-  //    (ズラしは短辺の最大4%まで=被写体をほぼ削らない)
-  const shiftX = (Math.random() * 2 - 1) * 4; // %
-  const shiftY = (Math.random() * 2 - 1) * 4;
-  filters.push(
-    `crop='min(iw,ih*${TARGET_ASPECT})*(1-${Math.abs(shiftX) / 200})':'min(ih,iw/${TARGET_ASPECT})*(1-${Math.abs(shiftY) / 200})':` +
-    `'(iw-ow)*${(0.5 + shiftX / 200).toFixed(3)}':'(ih-oh)*${(0.5 + shiftY / 200).toFixed(3)}'`
-  );
+  // 長辺を IMG_LONG_EDGE に揃える(タイル表示に十分・ファイルサイズも抑える)
+  filters.push(`scale='if(gt(iw,ih),${IMG_LONG_EDGE},-2)':'if(gt(iw,ih),-2,${IMG_LONG_EDGE})'`);
 
-  // 2) 反転(50%。反転を考慮する攻撃者には単独では効かないが、他の手法との併用で効く)
-  if (Math.random() < 0.5) filters.push("hflip");
-
-  // 3) 微小回転(内容は保ったままブロック境界を崩す)
-  const rot = (Math.random() * 2 - 1) * ROT_DEG_MAX;
-  if (Math.abs(rot) > 0.2) {
-    filters.push(`rotate=${((rot * Math.PI) / 180).toFixed(6)}:fillcolor=black`);
-  }
-
-  // 4) 明るさ・ガンマ(ピクセル統計を変える)
-  const gamma = 0.93 + Math.random() * 0.14;
+  // ガンマの微小変更(ピクセル統計をわずかに変える。見た目は保つ)
+  const gamma = 0.97 + Math.random() * 0.06;
   filters.push(`eq=gamma=${gamma.toFixed(3)}`);
 
   try {
@@ -503,12 +483,37 @@ function publicBase(req) {
   return `${proto}://${host}`;
 }
 
-async function fetchRandomImageBatch(limit) {
+// スクリーンショット/画面UIの画像を出題プールから除外する。
+// 実測: 安全画像の約51%がスクリーンショット系タグ付き(最多は「日本語のテキスト」)。
+// こうした画像はお題の被写体が「画面の小さなアバター」として写っていることが多く、
+// タグは正しくても人間には判定できない(実測でXプロフィールのスクショが出題されていた)。
+const SCREENSHOT_TAGS = new Set([
+  "日本語のテキスト", "対話箱", "文字の壁", "プロフィール", "凍結済みアカウント",
+  "スクリーンショット", "偽のスクリーンショット", "スクショ", "スクリーンキャプチャ",
+  "ツイート", "twitter", "x", "タイムライン", "リツイート", "トレンド", "通知",
+  "テロップ", "チャットログ", "メニュー", "チャンネル", "検索結果", "投稿画面",
+  "アップロード", "アプリ", "ブラウザ", "ウェブサイト", "サイト", "ウィンドウ",
+  "ui", "エクセル", "ワード", "字幕", "文字", "ロゴ", "タイトル", "見出し",
+  "キャプション", "テキスト", "一覧", "画面", "スクリーン", "モニター",
+]);
+
+// 1枚あたりのタグ数が多い画像は「要素が多すぎる雑然とした画像」。
+// 実測: 中央値28タグ。少ない画像ほど被写体が絞られている(<=25で41%)。
+const MAX_TAGS_PER_IMAGE = Number(process.env.MAX_TAGS_PER_IMAGE || 26);
+
+async function fetchRandomImageBatch(limit, level = 0) {
   const offset = Math.floor(Math.random() * 29500);
   const q = encodeURIComponent("safety:safe type:image");
   const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
   return (d?.results || [])
-    .filter((p) => p && p.id && p.thumbnailUrl && goodAspect(p))
+    .filter((p) => {
+      if (!p || !p.id || !p.thumbnailUrl || !goodAspect(p)) return false;
+      if (level >= 2) return true; // 緩和段階2: スクリーンショットも許容(出題不能を避ける)
+      const names = (p.tags || []).map((x) => ((x.names && x.names[0]) || "").toLowerCase());
+      if (names.some((n) => SCREENSHOT_TAGS.has(n))) return false; // 画面キャプチャ除外
+      if (level === 0 && names.length > MAX_TAGS_PER_IMAGE) return false; // 雑然とした画像を除外
+      return true;
+    })
     .map((p) => {
       // タグ名とその使用回数(ノイズ/メタ判定に使う)を保持
       const tagU = new Map();
@@ -521,6 +526,7 @@ async function fetchRandomImageBatch(limit) {
         url: absUrl(p.thumbnailUrl),
         tags: new Set(tagU.keys()),
         tagU,
+        tagCount: tagU.size,
       };
     });
 }
@@ -530,11 +536,16 @@ async function fetchRandomImageBatch(limit) {
 //  2タグAND … 「◯◯と△△の両方が写っている画像を全部選べ」(正解=両方のタグを持つ画像)
 // 実測で「お題タグは1つに限らなくてよい」という方針に基づき、2タグの組み合わせも出題する。
 // これで出題のバリエーションが増え、ボット側は2つの対象を照合する必要があるため難度も上がる。
-const PAIR_PROB = Number(process.env.PAIR_PROB || 0.5); // 2タグ出題にする確率
+const PAIR_PROB = Number(process.env.PAIR_PROB || 0.35); // 2タグ出題にする確率
 
 async function makeChallenge() {
-  for (let i = 0; i < 16; i++) {
-    const batch = await fetchRandomImageBatch(20);
+  // フィルタを段階的に緩める(厳しいフィルタで出題できない場合に品質より可用性を優先)。
+  // 段階0=厳しい(スクショ除外+タグ数制限) / 1=スクショ除外のみ / 2=制限なし+候補条件も緩和
+  const LEVELS = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2];
+  for (let i = 0; i < LEVELS.length; i++) {
+    const level = LEVELS[i];
+    const relaxed = level >= 2;
+    const batch = await fetchRandomImageBatch(20, level);
     if (batch.length < GRID_SIZE) continue;
 
     // タグごとに「どの画像に付いているか」を保持(2タグの組み合わせ判定に使う)
@@ -557,24 +568,39 @@ async function makeChallenge() {
       for (let b = a + 1; b < tagList.length; b++) {
         const [ta, va] = tagList[a];
         const [tb, vb] = tagList[b];
-        // 各タグが複数枚に付いていて、両方を持つ画像が1〜3枚ある組み合わせだけ
+        // 各タグが複数枚に付いていて、両方を持つ画像がある組み合わせだけ
         if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
         // 片方が他方を含む組み合わせは避ける(例: ライフル / アサルトライフル)。
         // 見た目で区別できず、片方だけの画像を引っかけにすると人間には不公平になる
         if (ta.includes(tb) || tb.includes(ta)) continue;
         let both = 0;
         for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
-        if (both < 1 || both > 3) continue;
+        const bothMin = 2; // 「両方を持つ画像」が2枚以上=組み合わせが実在するとみなす
+        const bothMax = relaxed ? 4 : 3;
+        if (both < bothMin || both > bothMax) continue;
         const union = new Set([...va.imgs, ...vb.imgs]).size;
-        if (union > 8) continue; // 広すぎる(ダミーが作れない)
+        if (!relaxed && union > 8) continue; // 広すぎる(ダミーが作れない)
         pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
       }
     }
 
     // --- 単一タグの候補 ---
+    // 出現回数(=同じバッチで何枚に付いているか)が多いタグほど「その画像の主題」である確率が高い。
+    // 実測: 出現2枚のタグは誤付与(例: 電車の画像に「バッグ」)が混ざり、正解が人間に見て分からない問題になった。
+    // そこで出現数の多いタグを強く優先し、可能なら3枚以上に付くタグだけを使う。
     const singleCands = [];
+    const singleMax = relaxed ? 6 : 5;
+    const singleMin = relaxed ? 2 : 3; // 厳しい段階では3枚以上(誤付与を避ける)
     for (const [tag, v] of byTag) {
-      if (v.imgs.size >= 2 && v.imgs.size <= 4) singleCands.push({ tag, n: v.imgs.size, usages: v.usages });
+      if (v.imgs.size >= singleMin && v.imgs.size <= singleMax) {
+        singleCands.push({ tag, n: v.imgs.size, usages: v.usages });
+      }
+    }
+    // 3枚以上の候補が無い場合は2枚も許容(出題不能を避ける)
+    if (!singleCands.length) {
+      for (const [tag, v] of byTag) {
+        if (v.imgs.size === 2) singleCands.push({ tag, n: 2, usages: v.usages });
+      }
     }
 
     const usePair = pairCands.length > 0 && (singleCands.length === 0 || Math.random() < PAIR_PROB);
@@ -585,10 +611,10 @@ async function makeChallenge() {
     let trapIdxs = []; // どちらか片方だけを持つ画像(人間には引っかけとして機能する。正解ではない)
 
     if (usePair) {
-      // 具体性の高い組み合わせを優先して抽選
+      // 具体性の高い組み合わせを優先して抽選(両方を持つ画像が多い=主題らしい)
       const roulette = [];
       for (const c of pairCands) {
-        const w = Math.max(1, Math.round(c.both * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
+        const w = Math.max(1, Math.round(c.both ** 2 * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
         for (let k = 0; k < w; k++) roulette.push(c);
       }
       const pick = roulette[Math.floor(Math.random() * roulette.length)];
@@ -599,9 +625,10 @@ async function makeChallenge() {
       for (const idx of setA) if (!setB.has(idx)) trapIdxs.push(idx);
       for (const idx of setB) if (!setA.has(idx)) trapIdxs.push(idx);
     } else {
+      // 出現数の多いタグを強く優先(主題らしさの代理指標。誤付与を避ける)
       const roulette = [];
       for (const c of singleCands) {
-        const w = Math.max(1, Math.round(c.n * concreteness(c.usages) * 10));
+        const w = Math.max(1, Math.round(c.n ** 2 * concreteness(c.usages) * 10));
         for (let k = 0; k < w; k++) roulette.push(c);
       }
       const pick = roulette[Math.floor(Math.random() * roulette.length)];
@@ -609,6 +636,27 @@ async function makeChallenge() {
       targetIdxs = [...byTag.get(pick.tag).imgs];
     }
 
+    if (!targetIdxs.length) continue;
+
+    // --- 一貫性フィルタ: 正解候補から「浮いた1枚」を除く ---
+    // AIタグ付けの誤付与(例: 商品の箱だけの画像に「カーディガン」)は、
+    // 他の正解画像と共通のタグを持たないことが多い(実測で確認)。
+    // 正解候補同士が共有するタグを1つも持たない画像は誤付与とみなして落とす。
+    if (targetIdxs.length >= 2) {
+      const self = promptTags.map((t) => t);
+      const others = (idx) => [...batch[idx].tags].filter((t) => !self.includes(t));
+      const coherent = targetIdxs.filter((idx) => {
+        const mine = new Set(others(idx));
+        // 他の正解候補のどれかと、お題以外のタグを1つ以上共有しているか
+        for (const other of targetIdxs) {
+          if (other === idx) continue;
+          for (const t of others(other)) if (mine.has(t)) return true;
+        }
+        return false;
+      });
+      // 一貫した組が1つでも残るなら、それを正解にする(誤付与の孤立画像を落とす)
+      if (coherent.length >= 1) targetIdxs = coherent;
+    }
     if (!targetIdxs.length) continue;
 
     // 正解 = 条件を満たす画像 / ダミー = 条件を満たさない画像
