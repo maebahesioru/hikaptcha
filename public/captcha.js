@@ -27,18 +27,18 @@
       border-radius: 12px;
       padding: 14px;
       width: 100%;
-      max-width: 560px;
+      max-width: 660px;
       user-select: none;
     }
     .hkc-title { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #a1a1aa; }
-    .hkc-prompt { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: #d4d4d8; }
+    .hkc-prompt { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: #d4d4d8; }
     .hkc-prompt b { color: #7dd3fc; }
     .hkc-prompt .all { color: #fcd34d; }
-    .hkc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .hkc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
     .hkc-tile {
       position: relative;
       padding: 0;
-      border: 1px solid #3f3f46;
+      border: 1px solid #52525b;
       border-radius: 8px;
       overflow: hidden;
       background: #000;
@@ -47,7 +47,13 @@
       display: block;
       transition: border-color .12s, opacity .12s;
     }
-    .hkc-tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .hkc-tile img {
+      width: 100%; height: 100%;
+      /* 全体が見えるように contain。ただし余白が目立たないよう僅かに拡大する */
+      object-fit: contain;
+      transform: scale(1.04);
+      display: block;
+    }
     .hkc-tile:hover { border-color: #71717a; }
     .hkc-tile.sel { border-color: #7dd3fc; outline: 2px solid rgba(125, 211, 252, .6); outline-offset: -1px; }
     .hkc-tile.sel img { opacity: .82; }

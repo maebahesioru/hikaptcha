@@ -40,7 +40,7 @@ const GRID_SIZE = 9;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 出題の有効期限
 const MAX_ATTEMPTS = 3; // 1出題あたりの回答試行回数
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費されるまで)
-const IP_QUOTA = 60; // IPごとの出題+回答リクエスト上限(人間の試行錯誤ではまず到達しない水準)
+const IP_QUOTA = Number(process.env.IP_QUOTA || 60); // IPごとの出題+回答リクエスト上限
 const IP_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHALLENGES = 2000;
 const MAX_PER_IP = 10; // 同一IPで同時に保持する出題の上限(別タブ・同一NAT対策)
@@ -252,6 +252,20 @@ const JUNK_TAG = [
   /@/,
   /^[\s\-_/\\]+$/,
 ];
+// 記号類が含まれるタグは排除。個別列挙だと漏れる(●_豆獣石× / 野菜、野菜 / “原始衝撃” / 《腕輪》 / 靴... / グレイ・フーディー)
+// ので「ひらがな・カタカナ・漢字・英字・々以外の文字を含むタグは全部落とす」構造ルールにする
+const NON_WORD = /[^\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\u3005A-Za-z]/;
+// ⚠️ 「・」(U+30FB)はカタカナブロックの中に居るので上の NON_WORD をすり抜ける(実測)
+//    同じく中点・繰り返し記号・長音でない約物は個別に落とす
+const KATAKANA_PUNCT = /[・゠ヽヾヿ・]/;
+// 抽象化・分類を表す語尾で終わるタグ(実測: バランス型 / 擬人化 / 写実的 / 監視者 / 海兵隊員 / 鳥類)
+const SUFFIX_ABSTRACT = /(化|型|風|系|調|的|性|感|式|者|員|類|群|別|側|内|外|中|上|下)$/;
+// 「〜の〜」形式は説明文になりやすい(実測: 手のジェスチャー / ゼルダの伝説 / ブランド名模倣 / 目の下のモグラ)
+const NO_PARTICLE = /の/;
+// 抽象・状態・分類を表す語(実測でお題として出た不正タグの語尾/語幹から抽出)
+const ABSTRACT_WORD = /ビュー|アカウント|チャレンジ|凍結|誹謗|中傷|超大型|大型|物体|図面|アップ|ダウン|フォーカス|タイム|ゲーム|ニュー|リセット|ロード|セーブ|渋滞|検閲|モザイク|沈没|節足|鉛筆画|木材|青年|少女|少年|大人|強膜|瞳孔|網膜|血管|骨格|筋肉|内臓|器官|細胞|遺伝子|染色体|ウイルス|細菌|菌|カビ|北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|東京|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|京都|大阪|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄|ok|焦点|配置|模倣|照準|集中|監視|隊員|群衆|容器|絵文字|サイン|チャート|グラフ|コンピューター|ゲーム機|ソース|グループ|ウィンドウ|静物画|美術|外側|内側|消防|株式会社|有限会社|写実|公式|製品|商品|景品|特典|報酬|対価|価格|金額|料金|費用|収支|利益|損失|数量|個数|面積|体積|距離|速度|温度|湿度|気圧|密度|濃度|割合|比率|確率|平均|最大|最小|合計|差分|増減|変化|変動|推移|予測|推計|統計|分析|評価|判定|診断|検証|検査|測定|調査|研究|学習|教育|訓練|練習|試行|実験|観察|記録|報告|発表|公開|掲示|提示|提出|申請|登録|認証|許可|承認|拒否|禁止|管理|処理|表示|操作|動作|行動|活動|作業|業務|事業|産業|組織|制度|体系|構造|構成|要素|成分|原料|材料|機能|性能|能力|効果|影響|理由|原因|結果|目的|手段|方法|方式|形式|種類|分類|属性|性質|特徴|傾向|程度|段階|範囲|領域|部門|状態|状況|様子|雰囲気|印象|感覚|感情|記憶|意識|精神|心理|思想|概念|理論|法則|原理|原則|方針|基準|規格|標準|規範|条件|要件|制限|制約|可能性|必要性|一般|特殊|普通|通常|基本|応用|実用|実際|現実|理想|目標|広告|宣伝|告知|案内|説明|解説|紹介|連絡|相談|質問|回答|返事|予定|計画|準備|確認|経験|実績|成果|実力|限界|環境|空間|時間|瞬間|期間|時代|現在|過去|未来|歴史|文化|社会|経済|政治|科学|数学|音楽|文学|芸術|宗教|哲学|伝統|習慣|風習|行事|儀式|祭典|イベント|大会|試合|競技|勝負|勝敗|勝利|敗北|順位|ランキング|得点|点数|スコア|レベル|ランク|クラス|称号|肩書|役職|地位|立場|関係|繋がり|結びつき|影響力|支配力|権力|権限|責任|義務|権利|自由|平等|平和|戦争|紛争|争い|喧嘩|口論|議論|討論|会議|集会|集まり|集合|集団|団体|仲間|同僚|友人|知人|家族|親戚|血縁|恋愛|結婚|離婚|出産|育児|介護|看護|医療|治療|診療|手術|投薬|処方|症状|病気|疾患|怪我|負傷|損傷|故障|不具合|誤作動|異常|正常|健全|不健全|健康|不健康|栄養|カロリー|ビタミン|ミネラル|タンパク|脂質|糖質|食物繊維/;
+// 助詞を含むタグは文の断片(実測: 返信をポスト)。誤除外を避けて「を」「が」だけを対象にする
+const PARTICLE_IN = /[をが]/;
 const STOP_TAG = /ください|チェック|翻訳|依頼|解説|説明|聞いてみ|なので|じゃない|です|ます|ました|じゃん|ってしま|どうぞ|の巻|つけよう/;
 // 広すぎる/抽象的すぎるタグ(ほぼ全画像につく等)はお題にしない
 const EXCLUDE_TAGS = new Set([
@@ -260,7 +274,57 @@ const EXCLUDE_TAGS = new Set([
   "1人の少年", "2人の男児", "立ち姿", "人物", "人々", "人間の", "子供", "少女",
   "少年", "動物", "日本人", "オタク", "カジュアル", "服", "衣服", "髪", "目",
   "顔", "手", "靴", "建物", "街", "家",
+  // 実測でお題として出た不正タグ(752候補の洗い出しから)
+  "ポヴ", "グリン", "スミスカラ", "モシャン", "ユウギオ", "ハゲ", "悪夢の燃料",
+  "アジア人", "白人", "黒人", "外国人", "海兵隊員", "監視者", "デュエルモンスター",
+  "武器", "風景", "哺乳類", "両生類", "爬虫類", "菌類", "昆虫", "植物", "生物",
+  "ゲーム機", "コンピューター", "スマートフォン", "マウスマスク", "マスクプル",
+  "ボーダー", "ソロフォーカス", "物体焦点", "製品配置", "頭部照準像", "食糧集中",
+  "チャート", "グラフ", "絵文字", "サイン", "ソース", "グループ", "ウィンドウ",
+  "アップル", "ゼルダの伝説", "クロスオーバー", "アニメ化", "静物画", "公式美術",
+  "家具", "照明", "建築", "装飾", "模様", "文字", "数字", "記号", "標識",
+  // 2周目の実測(658候補の点検から)
+  "無表情", "表面", "四足動物", "レストラン", "開けるジャケット", "キャラクター人形",
+  "ポブハンズ", "バウティー", "シークエンキャップ", "ストリークヘア", "ガチャ",
+  "カップル", "チャットログ", "ショップ", "軍隊", "プレイド", "機械", "惑星",
+  "キッチン", "ホーム", "警察", "兄", "兄弟", "家族", "成人", "成熟したオス", "肥満",
+  "暗い肌色", "モーションブラー", "ハグ", "ミニ人", "動物視点", "年齢差", "スカーリー",
+  "巾着型", "ダブルV", "ダブルバン", "バラバラ", "異色性", "売春", "トップレス",
+  "トップレス男性", "表紙カバー", "カバー", "コスプレ", "コスプレ写真", "人型", "アップ",
+  "胴体をトリミング", "スケッチ", "服装に文字", "スタミナ", "舞台照明", "手鞭",
+  "元素生物", "スピード", "ハッピー", "カード", "テーマ", "デザイン", "スタイル",
+  "アディダス", "サンリオ", "マイクロソフト", "ドラゴンボール", "ニンテンドースイッチ",
+  "任天堂", "ポケモン", "艦隊コレクション", "オリンピック", "サッカー", "野球",
+  // 3周目(537候補の点検から)
+  "ボカロ", "赤面シール", "ワイドスクリーン", "融合", "メイク", "カニス", "図面",
+  "マリオ", "ルイージ", "マーベル", "ガンダム", "コカコーラ", "日本神話", "デブ",
+  "タイトル", "ミニガール", "一片", "シルエット", "別種", "対話箱", "開口部", "履物",
+  "車両", "間接兵器", "セイキン", "フィールド", "天使", "声優", "ゲームCG", "スパイクス",
+  "トレーディングカード", "ちびインセット", "正面図", "抽象的", "獲得アイテム", "超絶",
+  "獲得ゴールド", "ジェンダースワップ", "型破り", "ハロ", "アンデッド", "クリスマス",
+  "衣装", "キャラクター", "小物", "雑貨", "用品", "器具", "器材", "備品",
+  // 4周目(実サーバー130サンプルの点検から)
+  "正面", "デュアルショック", "肩甲骨筋", "エッチキン", "アクエアイズ", "返信", "共有",
+  "修羅場", "ビデオゲーム", "インクリング", "マスコット", "ボイス", "サウンド", "ミュージック",
+  "ホームページ", "メッセージ", "コメント", "リアクション", "スタンプ", "シール",
+  // 5周目(実サーバー220サンプルの点検から)
+  "ドウギ", "クリーン", "切亜未マリーサ", "フレント", "ニセキン", "内部", "弱点", "攻撃",
+  "ヒカ", "ヒカクラン", "ヒカル", "下着", "公園", "バブル", "メリークリスマス", "敬礼",
+  // 6周目(240サンプルの点検から)
+  "画像", "デジタルアート", "マインクラフト", "保存", "チャーリザード", "反応画像", "今日",
+  "山田亮", "プライドカラー", "サイズ差", "デジタル", "イラスト", "運転", "友情コンボ",
+  "ブラウンテーマ", "催眠術", "頂点伝説", "素材配布", "コラージュ", "色収差", "フェリス車輪",
+  "触手毛", "マウスホールド", "パンティーホース", "ケツ", "体重", "クラウド", "ウマ娘",
+  "フォートナイト", "ヒカマー新聞", "ローズンメイデン", "オーラ", "ワシ科", "楽器",
+  "青色アーカイブ", "グレーススーツ", "ホリデー", "コンドーム", "ブラ", "スポーツウェア",
+  "コンビニエンスストア", "東方", "厚味噌", "周囲保護", "ベイビー", "デフォルメ",
+  // 7周目(240サンプルの点検から。具体性の重み付けで大きく改善した後の残り)
+  "デカキン", "コスト", "リンク", "最新", "女子", "カラフル", "グロ", "水泳輪", "田中聡太",
+  "メタ", "コンサート", "サムネイル", "モノクロ", "再生リスト", "貧血", "部屋", "週刊",
+  "詳細", "先生", "人気", "リリーパッド", "ヒューマノイド", "ロック", "フェラーリ",
+  "ジャージー", "手扇子", "紙扇", "ヒカキン", "デカキン", "ニセキン", "カスペ",
 ]);
+
 
 function usableTag(t) {
   if (!t || t.length < 2) return false;
@@ -275,8 +339,14 @@ function questionableTag(t, usages) {
   if (t.length > 10) return false;
   if (HAS_NUM.test(t)) return false; // 年号・数字入りを排除
   if (JUNK_START.test(t)) return false; // 句読点/記号始まり
+  if (NON_WORD.test(t)) return false; // 記号・約物を含む(●_豆獣石× / 野菜、野菜 / “原始衝撃” 等)
+  if (KATAKANA_PUNCT.test(t)) return false; // ・等(カタカナブロック内の約物)
   if (/\s/.test(t)) return false; // 空白入りはクエリ区切りと解釈される
   if (EXCLUDE_TAGS.has(t)) return false;
+  if (NO_PARTICLE.test(t)) return false; // 「〜の〜」の説明文(手のジェスチャー等)
+  if (ABSTRACT_WORD.test(t)) return false; // 抽象・状態・分類を表す語
+  if (SUFFIX_ABSTRACT.test(t)) return false; // 抽象化・分類の語尾
+  if (PARTICLE_IN.test(t)) return false; // 助詞入り=文の断片
   if (!HAS_KATAKANA_OR_KANJI.test(t)) return false; // ひらがなのみ除外
   if (HIRA_TAIL.test(t)) return false; // 「黒地に」等の助詞/活用終端を除外
   if (META_TAG.test(t)) return false; // 構図/技術/メタ語
@@ -284,6 +354,16 @@ function questionableTag(t, usages) {
   if (HIRA.test(t) && (HIRA.test(t.slice(-2, -1)) || (t.match(/[\u3040-\u309f]/g) || []).length >= 3)) return false; // 文系キャプション
   return true;
 }
+
+// お題の「具体性スコア」: 一般によく使われる語(=ありふれた具体物)ほど高くする。
+// 実測で、使用回数が多いタグは テレビ/カメラ/バッグ のような具体物、
+// 少ないタグは 造語・抽象語(素材配布/型破りなメディア/ニセキン 等)に偏っていた。
+// 具体物寄りに強く傾けるため平方根スケールで重み付けする
+function concreteness(usages) {
+  const u = Math.max(10, Number(usages) || 10);
+  return Math.sqrt(u / 100); // 10→0.32, 100→1.0, 1000→3.16, 3000→5.48
+}
+
 
 // ---------- 出題生成 ----------
 
@@ -300,20 +380,20 @@ function goodAspect(p) {
 // 画像プロキシ + 改変: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
 // 公開APIでタグを引いて正解を機械的に導出できてしまう。不透明IDに置き換えて中継する。
 // さらに配信時に「余白付与+微小クロップ+回転+再圧縮」で改変する:
-//   実測 pHash距離 37〜41/64 (元画像とは別物として扱われる) / バイト一致もしなくなる
+//   実測 pHash距離 20〜25/64 (元画像とは別物として扱われる) / バイト一致もしなくなる
 //   → 事前にbooruを全件スクレイプして作った逆引き索引・完全一致キャッシュが使えなくなる
-//   ※ 被写体は削らない(余白を足すだけ)ので、人間の判別性は落ちない
+//   ※ 余白は控えめ(6〜9%)にして被写体の占有率を約85%確保し、タイルの見やすさを優先する
 const images = new Map(); // imgId -> { url, exp, challengeId, buf, transformed }
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
 // 改変パラメータ(環境変数で調整可)
 const TRANSFORM = process.env.IMG_TRANSFORM !== "0"; // 0で無効化
-const PAD_PCT_MIN = Number(process.env.PAD_MIN || 10);
-const PAD_PCT_MAX = Number(process.env.PAD_MAX || 20);
-const CROP_PCT_MAX = Number(process.env.CROP_MAX || 5);
-const ROT_DEG_MAX = Number(process.env.ROT_MAX || 2);
-const JPEG_Q = Number(process.env.JPEG_Q || 4);
+const PAD_PCT_MIN = Number(process.env.PAD_MIN || 8);
+const PAD_PCT_MAX = Number(process.env.PAD_MAX || 12);
+const CROP_PCT_MAX = Number(process.env.CROP_MAX || 3);
+const ROT_DEG_MAX = Number(process.env.ROT_MAX || 2.5);
+const JPEG_Q = Number(process.env.JPEG_Q || 3);
 
 let FFMPEG = null; // 遅延判定(無ければ改変せず素通し)
 function hasFfmpeg() {
@@ -332,7 +412,8 @@ const execFileP = promisify(execFile);
 const TMP = mkdtempSync(path.join(tmpdir(), "hkc-img-"));
 let tmpSeq = 0;
 
-// 余白(構図変更)+微小クロップ+回転+再圧縮で「元画像と別物」のJPEGを作る
+// 余白(構図変更)+微小クロップ+回転+微アスペクト変更+(時々)反転+再圧縮で
+// 「元画像と別物」のJPEGを作る。単一手法だと効かない画像がある(実測: 最小距離3)ため重ねる。
 async function transformImage(buf) {
   if (!TRANSFORM || !hasFfmpeg()) return null;
   const id = (tmpSeq = (tmpSeq + 1) % 100000);
@@ -340,17 +421,38 @@ async function transformImage(buf) {
   const out = path.join(TMP, `o${id}.jpg`);
   writeFileSync(inp, buf);
   const filters = [];
+  // 反転(内容は同じでpHashが大きく動く。実測で最も効率が良く、
+  // 単独でpHash距離が二桁動くので「改変が効かない画像」の下限を担保できる)
+  filters.push("hflip");
+
+  // 微小クロップ
   const crop = Math.random() * CROP_PCT_MAX;
   if (crop > 0.5) {
     const keep = (100 - crop) / 100;
     filters.push(`crop=iw*${keep.toFixed(3)}:ih*${keep.toFixed(3)}`);
   }
+
+  // アスペクト比の微小変更(pHashのブロック境界を崩す)
+  const ax = 1 + (Math.random() * 2 - 1) * 0.06; // ±6%
+  const ay = 1 + (Math.random() * 2 - 1) * 0.06;
+  if (Math.abs(ax - 1) > 0.02 || Math.abs(ay - 1) > 0.02) {
+    filters.push(`scale=iw*${ax.toFixed(3)}:ih*${ay.toFixed(3)}`);
+  }
+
+  // 余白(構図変更・被写体は削らない)
   const pad = PAD_PCT_MIN + Math.random() * Math.max(0, PAD_PCT_MAX - PAD_PCT_MIN);
-  const dark = () => Math.floor(Math.random() * 90); // 暗めのランダム背景(白飛び回避)
+  const dark = () => Math.floor(Math.random() * 90);
   const bg = `0x${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}`;
   filters.push(`pad=iw+2*iw*${(pad / 100).toFixed(3)}:ih+2*ih*${(pad / 100).toFixed(3)}:iw*${(pad / 100).toFixed(3)}:ih*${(pad / 100).toFixed(3)}:${bg}`);
+
+  // 微小回転
   const rot = (Math.random() * 2 - 1) * ROT_DEG_MAX;
   if (Math.abs(rot) > 0.2) filters.push(`rotate=${((rot * Math.PI) / 180).toFixed(6)}:fillcolor=${bg}`);
+
+  // 明るさ・ガンマの微小変更(ピクセル統計も変える)
+  const gamma = 0.92 + Math.random() * 0.16;
+  filters.push(`eq=gamma=${gamma.toFixed(3)}`);
+
   try {
     await execFileP("ffmpeg", ["-y", "-loglevel", "error", "-i", inp, "-vf", filters.join(","), "-q:v", String(JPEG_Q), out], { timeout: 8000 });
     return readFileSync(out);
@@ -407,25 +509,33 @@ async function makeChallenge() {
     const batch = await fetchRandomImageBatch(16);
     if (batch.length < GRID_SIZE) continue;
 
-    const counts = new Map();
+    const counts = new Map(); // tag -> {n, usages}
     for (const p of batch) {
       for (const t of p.tags) {
         const usages = p.tagU.get(t) || 0;
         if (!questionableTag(t, usages)) continue;
-        counts.set(t, (counts.get(t) || 0) + 1);
+        const cur = counts.get(t);
+        if (cur) cur.n += 1;
+        else counts.set(t, { n: 1, usages });
       }
     }
     const candidates = [];
-    for (const [tag, n] of counts) {
-      if (n >= 2 && n <= 4) candidates.push({ tag, n });
+    for (const [tag, v] of counts) {
+      if (v.n >= 2 && v.n <= 4) candidates.push({ tag, n: v.n, usages: v.usages });
     }
     if (!candidates.length) continue;
 
-    // 重み付きランダム選択(出現数が多い方をやや優先)
+    // 重み付きランダム選択:
+    //   出現数(同じバッチで複数枚に付く=お題として成立する)×
+    //   具体性(使用回数が多い=ありふれた具体物)
+    // これで「テレビ/バッグ/スマホ」のような具体物が選ばれやすくなる
     const roulette = [];
-    for (const c of candidates) for (let k = 0; k < c.n; k++) roulette.push(c.tag);
+    for (const c of candidates) {
+      const w = Math.max(1, Math.round(c.n * concreteness(c.usages) * 10));
+      for (let k = 0; k < w; k++) roulette.push(c.tag);
+    }
     const tag = roulette[Math.floor(Math.random() * roulette.length)];
-    const tagCount = counts.get(tag) || 2;
+    const tagCount = counts.get(tag)?.n || 2;
 
     const targets = batch.filter((p) => p.tags.has(tag)).slice(0, tagCount);
     const rest = batch.filter((p) => !p.tags.has(tag));
