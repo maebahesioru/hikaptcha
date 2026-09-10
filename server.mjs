@@ -421,7 +421,7 @@ const prefetched = new Map();
 const stats = {
   challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [], modes: {},
   // 出題生成の失敗理由(チューニング用。attempts=試行回数の合計)
-  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0,
+  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0,
 };
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
@@ -517,10 +517,10 @@ const SCREENSHOT_TAGS = new Set([
 // 実測: 中央値28タグ。少ない画像ほど被写体が絞られている(<=25で41%)。
 const MAX_TAGS_PER_IMAGE = Number(process.env.MAX_TAGS_PER_IMAGE || 26);
 
-async function fetchRandomImageBatch(limit, level = 0) {
-  const offset = Math.floor(Math.random() * 29500);
+// 1つのoffsetから「連続した投稿」を取得する(内部用)。バッチ構築は下の fetchRandomImageBatch。
+async function fetchSlice(offset, limit, level = 0) {
   const q = encodeURIComponent("safety:safe type:image");
-  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags`);
+  const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags,source`);
   return (d?.results || [])
     .filter((p) => {
       if (!p || !p.id || !p.thumbnailUrl || !goodAspect(p)) return false;
@@ -543,8 +543,39 @@ async function fetchRandomImageBatch(limit, level = 0) {
         tags: new Set(tagU.keys()),
         tagU,
         tagCount: tagU.size,
+        // 元ネタ(出題の多様性チェック用。表示には使わない)
+        // 投稿者単位まで切り出す("x.com/hikakin" 等)。同じ人の連投を検出するため
+        src: String(p.source || "").replace(/^https?:\/\//, "").split("/").slice(0, 2).join("/"),
       };
     });
+}
+
+// バッチ取得: **複数の離れたoffsetから小分けに取って混ぜる**。
+// ⚠️ 実測(2026-09): 1回の連続取得(limit=60&offset=N)だと、その60件は
+//    投稿IDが連番(間隔平均1.0)の「アップロード順の塊」になる。同じ投稿者が同じ元ネタを
+//    連投していると、塊全体が同じ撮影/同じチャンネルになり、隣接画像のタグ類似が0.49まで上がる。
+//    → 9枚のグリッドが同じ人物の別カットばかりになり「全部の画像が似通って見える」。
+//    離れたoffsetから小分けに取るとID間隔が平均394まで広がり、隣接類似が0.27に下がる。
+//    (hikabooruの構成自体も83%がx.com・37%がサムネイル系タグなので、元データ側の偏りは残る)
+async function fetchRandomImageBatch(limit, level = 0) {
+  const slices = Math.max(1, Math.min(SAMPLES_PER_BATCH, limit));
+  const per = Math.max(1, Math.ceil(limit / slices));
+  const offsets = [];
+  while (offsets.length < slices) {
+    const o = Math.floor(Math.random() * 29500);
+    if (!offsets.includes(o)) offsets.push(o);
+  }
+  const parts = await Promise.all(offsets.map((o) => fetchSlice(o, per, level).catch(() => [])));
+  const seen = new Set();
+  const merged = [];
+  for (const part of parts) {
+    for (const p of part) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      merged.push(p);
+    }
+  }
+  return merged;
 }
 
 // 出題の形式:
@@ -598,6 +629,10 @@ const TAG_MIN_USAGES = Number(process.env.TAG_MIN_USAGES || 150);
 // 1回に取る画像の枚数。フィルタで落ちる分を見込んで多めに取る
 // (実測: 20枚だと9枚に足りない空振りが多発し、API往復で出題が遅くなっていた)。
 const BATCH_LIMIT = Number(process.env.BATCH_LIMIT || 60);
+
+// 1バッチを何個の「離れたoffset」から集めるか。
+// 1にすると連続した塊を引いてしまい、9枚が同じ撮影/同じチャンネルになる(実測で確認)。
+const SAMPLES_PER_BATCH = Number(process.env.SAMPLES_PER_BATCH || 6);
 
 function chooseMode() {
   if (FORCE_MODE) return FORCE_MODE;
@@ -738,6 +773,21 @@ async function distanceRatio(pairs) {
     }
     dd = dd / dm.length;
     const meanRatio = tt / Math.max(1, dd);
+    // グリッド内に(ほぼ)同一の画像が2枚あると不公平。
+    // 同じ絵なのに片方だけ正解/不正解になる(実測: 同一画像が並ぶと距離0)。
+    let minAll = 999;
+    for (let a = 0; a < sigs.length; a++)
+      for (let b = a + 1; b < sigs.length; b++) {
+        const d = ham(sigs[a], sigs[b]);
+        if (d < minAll) minAll = d;
+      }
+    if (minAll <= 2) {
+      stats.dupRejects++;
+      stats.lastVis.push({ dup: minAll, unfair: true });
+      if (stats.lastVis.length > 15) stats.lastVis.shift();
+      return 3.0; // 深刻度を高く返して却下させる
+    }
+
     // 見分け不能と判定する条件(実測で調整):
     //   ⚠️ 最小値同士の比較は統計的に歪む(ダミーは63ペア、正解同士は1ペア →
     //      最小値は必ずダミー側が小さくなる)。平均同士で比べる。
@@ -761,6 +811,67 @@ async function distanceRatio(pairs) {
   }
 }
 
+// 投稿者(元ネタ)が偏らないように選ぶ。各投稿者から1枚ずつ巡回して取る(ラウンドロビン)。
+// 実測: 連続取得では9枚すべてが同じ投稿者だった(=「全部なんとなく似てる」の正体)。
+// 投稿者を巡回させると元ネタ種類が1種→4〜6種に増える。
+function pickBySrcDiversity(pool, count, srcOf) {
+  const groups = new Map();
+  for (const idx of pool) {
+    const s = srcOf(idx) || "(なし)";
+    if (!groups.has(s)) groups.set(s, []);
+    groups.get(s).push(idx);
+  }
+  const lists = shuffle([...groups.values()]).map((g) => shuffle(g));
+  const out = [];
+  let added = true;
+  while (out.length < count && added) {
+    added = false;
+    for (const g of lists) {
+      if (out.length >= count) break;
+      if (g.length) { out.push(g.pop()); added = true; }
+    }
+  }
+  return out;
+}
+
+// ダミーを「タグが似ていない順」に選ぶ(グリッド全体が似通うのを防ぐ)。
+// 実測: 同じ撮影の別カットが並ぶと「全部の画像が似通って見える」。
+// 画像そのものの類似は視覚フィルタが別途見るので、ここはタグの多様性だけで選ぶ(追加コスト0)。
+function pickDiverse(pool, count, sets, already, srcOf, usedSrc) {
+  const chosen = [];
+  const picked = [...already];
+  const rest = [...pool];
+  const used = new Set(usedSrc || []);
+  while (chosen.length < count && rest.length) {
+    let bestI = 0, bestScore = Infinity;
+    for (let i = 0; i < rest.length; i++) {
+      const A = sets.get(rest[i]) || new Set();
+      let m = 0;
+      for (const P of picked) {
+        const B = P instanceof Set ? P : (sets.get(P) || new Set());
+        let inter = 0;
+        for (const x of A) if (B.has(x)) inter++;
+        const u = new Set([...A, ...B]).size;
+        const j = u ? inter / u : 0;
+        if (j > m) m = j;
+      }
+      // 同じ投稿者の画像には大きなペナルティ(タグ類似より優先)。
+      // 実測: 連続取得だと9枚すべてが同じ投稿者だった(=「全部なんとなく似てる」の正体)。
+      // ここで投稿者を分散させると、元ネタ種類が1種→5種程度まで増える。
+      const s = srcOf(rest[i]);
+      const penalty = s && used.has(s) ? 1.0 : 0;
+      const score = m + penalty;
+      if (score < bestScore) { bestScore = score; bestI = i; }
+    }
+    const pick = rest.splice(bestI, 1)[0];
+    chosen.push(pick);
+    picked.push(sets.get(pick) || new Set());
+    const ps = srcOf(pick);
+    if (ps) used.add(ps);
+  }
+  return chosen;
+}
+
 async function makeChallenge() {
   // フィルタを段階的に緩める(厳しいフィルタで出題できない場合に品質より可用性を優先)。
   // 段階0=厳しい(スクショ除外+タグ数制限) / 1=スクショ除外のみ / 2=制限なし+候補条件も緩和
@@ -782,6 +893,8 @@ async function makeChallenge() {
       stats.attempts++;
       if (batch.length < GRID_SIZE) { stats.fShortBatch++; continue; }
     }
+    // 投稿者(元ネタ)の識別: 同じ人の連投が並ぶのを避ける選択に使う
+    const srcOf = (idx) => batch[idx] && batch[idx].src;
 
     // タグごとに「どの画像に付いているか」を保持(2タグの組み合わせ判定に使う)
     const byTag = new Map(); // tag -> {usages, imgs:Set<index>}
@@ -899,19 +1012,19 @@ async function makeChallenge() {
         if (mode === "notpick") {
           const N = Math.max(1, Math.min(2, GRID_SIZE - tagSet.size));
           if (absent.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
-          targetIdxs = shuffle(absent).slice(0, N);
+          targetIdxs = pickBySrcDiversity(absent, N, srcOf);
           distractorPool = shuffle([...tagSet]).slice(0, GRID_SIZE - N);
           askN = N;
         } else {
           const k = Math.max(1, Math.min(tagSet.size, 1 + Math.floor(Math.random() * 3)));
           if (absent.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
-          targetIdxs = shuffle(absent).slice(0, GRID_SIZE - k);
+          targetIdxs = pickBySrcDiversity(absent, GRID_SIZE - k, srcOf);
           distractorPool = shuffle([...tagSet]).slice(0, k);
         }
       } else {
         // 正解 = タグを持つ画像から必要枚数だけグリッドに入れる / ダミー = タグを持たない画像
         const want = mode === "pick" ? pickN : Math.min(targetMax, tagSet.size);
-        targetIdxs = shuffle([...tagSet]).slice(0, Math.min(want, tagSet.size));
+        targetIdxs = pickBySrcDiversity([...tagSet], Math.min(want, tagSet.size), srcOf);
         distractorPool = shuffle(absent);
         askN = mode === "pick" ? targetIdxs.length : 0;
       }
@@ -996,7 +1109,20 @@ async function makeChallenge() {
       if (unfair >= 0.85) { stats.tagRejects++; continue; } // 見分け不能な出題は捨てて次のバッチへ
     }
 
-    const distractorIdxs = pool.slice(0, needs);
+    // ダミーは「タグが似ていない順」に選ぶ(グリッドが同じ撮影/同じ話題で埋まるのを防ぐ)。
+    // ⚠️ notpick はダミー=タグを持つ画像をちょうど GRID_SIZE-N 枚出す必要があるので、
+    //    プールをそのまま使う(選び直すと出題が成立しない)。
+    // ダミーも「投稿者が偏らない」ように選ぶ。正解と同じ投稿者は最後に回るよう、
+    // 正解が使った投稿者を先に除外してからラウンドロビンする。
+    const targetSrcs = new Set(targetIdxs.map(srcOf).filter(Boolean));
+    const freshPool = pool.filter((idx) => !targetSrcs.has(srcOf(idx)));
+    let distractorIdxs = pickBySrcDiversity(freshPool, needs, srcOf);
+    if (distractorIdxs.length < needs) {
+      // 別投稿者だけでは足りない場合は、同じ投稿者から補充する(可用性優先)
+      const rest = pool.filter((idx) => !distractorIdxs.includes(idx));
+      distractorIdxs = distractorIdxs.concat(pickBySrcDiversity(rest, needs - distractorIdxs.length, srcOf));
+    }
+    if (distractorIdxs.length < needs) { stats.fPool++; continue; }
 
     // --- 視覚フィルタ: 画像そのものが似すぎている出題を捨てる ---
     // タグの重なり(上のフィルタ)では捕まらない型の不公平をここで落とす。
@@ -1028,9 +1154,10 @@ async function makeChallenge() {
         url: batch[idx].url,
         imgId: registerImage(batch[idx].url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
         target: true,
-        // 診断用にタグを保持する。応答には含めない(本番のpayloadはid/urlのみ)。
-        // テスト用コピーだけがこれを応答に載せ、精度検証に使う。
+        // 診断用にタグ・元ネタを保持する。応答には含めない(本番のpayloadはid/urlのみ)。
+        // テスト用コピーだけがこれを応答に載せ、精度・多様性の検証に使う。
         tags: [...batch[idx].tags],
+        src: batch[idx].src,
       })),
       ...distractorIdxs.map((idx) => ({
         id: randomBytes(6).toString("hex"),
@@ -1039,6 +1166,7 @@ async function makeChallenge() {
         imgId: registerImage(batch[idx].url, cid),
         target: false,
         tags: [...batch[idx].tags],
+        src: batch[idx].src,
       })),
     ]);
 

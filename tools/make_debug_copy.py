@@ -20,7 +20,7 @@ s = open(p, encoding="utf-8").read()
 
 # 1) 正解タイルと元URLを payload に追加(検証スクリプトが答え合わせ・改変効果の測定に使う)
 old = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),"
-new = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, target: t.target, originalUrl: t.url, tags: [...t.tags] })),"
+new = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, target: t.target, originalUrl: t.url, tags: [...t.tags], src: t.src, postId: t.postId })),"
 assert old in s, "challenge payload pattern not found"
 s = s.replace(old, new)
 
