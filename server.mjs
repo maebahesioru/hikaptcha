@@ -22,6 +22,7 @@
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +40,7 @@ const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費�
 const IP_QUOTA = 60; // IPごとの出題+回答リクエスト上限(人間の試行錯誤ではまず到達しない水準)
 const IP_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHALLENGES = 2000;
+const MAX_PER_IP = 10; // 同一IPで同時に保持する出題の上限(別タブ・同一NAT対策)
 
 const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip}
 const tokens = new Map(); // token -> {exp}
@@ -143,6 +145,24 @@ function goodAspect(p) {
   return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
 }
 
+// 画像プロキシ: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
+// 公開APIでタグを引いて正解を機械的に導出できてしまう。不透明IDに置き換えて中継する。
+const images = new Map(); // imgId -> { url, exp }
+const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
+
+function registerImage(upstreamUrl) {
+  const id = randomBytes(12).toString("hex");
+  images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS });
+  return id;
+}
+
+// リクエストのホストから公開ベースURLを作る(埋め込み先が別オリジンでも絶対URLで返す)
+function publicBase(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
+  return `${proto}://${host}`;
+}
+
 async function fetchRandomImageBatch(limit) {
   const offset = Math.floor(Math.random() * 29500);
   const q = encodeURIComponent("safety:safe type:image");
@@ -200,12 +220,14 @@ async function makeChallenge() {
         id: randomBytes(6).toString("hex"),
         postId: p.id,
         url: p.url,
+        imgId: registerImage(p.url), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
         target: true,
       })),
       ...distractors.map((p) => ({
         id: randomBytes(6).toString("hex"),
         postId: p.id,
         url: p.url,
+        imgId: registerImage(p.url),
         target: false,
       })),
     ]);
@@ -227,6 +249,7 @@ function sweep() {
   const now = Date.now();
   for (const [id, c] of challenges) if (now - c.createdAt > CHALLENGE_TTL_MS) challenges.delete(id);
   for (const [tk, t] of tokens) if (now > t.exp) tokens.delete(tk);
+  for (const [imgId, img] of images) if (now > img.exp) images.delete(imgId);
   if (challenges.size > MAX_CHALLENGES) {
     const sorted = [...challenges.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
     for (const [id] of sorted.slice(0, sorted.length - MAX_CHALLENGES)) challenges.delete(id);
@@ -284,6 +307,42 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // 画像配信: hikabooruのサムネイルを中継する(URLから投稿IDを隠すため)
+  if (url.pathname.startsWith("/api/img/") && req.method === "GET") {
+    const imgId = url.pathname.slice("/api/img/".length);
+    const img = images.get(imgId);
+    if (!img || Date.now() > img.exp) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("not found");
+    }
+    try {
+      // ホットリンク判定を避けるため Referer を送らずに取得する
+      const up = await fetch(img.url, {
+        headers: { "user-agent": "hikamani-captcha/1.0" },
+        signal: AbortSignal.timeout(12000),
+        cache: "no-store",
+      });
+      if (!up.ok || !up.body) {
+        res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+        return res.end("upstream error");
+      }
+      res.writeHead(200, {
+        "content-type": up.headers.get("content-type") || "image/jpeg",
+        "cache-control": "private, max-age=300",
+        "access-control-allow-origin": "*",
+      });
+      return await new Promise((resolve) => {
+        const stream = Readable.fromWeb(up.body);
+        stream.pipe(res);
+        stream.on("end", resolve);
+        stream.on("error", () => { try { res.end(); } catch {} resolve(); });
+      });
+    } catch {
+      if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("upstream error");
+    }
+  }
+
   // 出題
   if (url.pathname === "/api/challenge" && req.method === "GET") {
     const ip = clientIp(req);
@@ -291,17 +350,28 @@ async function handleApi(req, res, url) {
       return sendJson(res, 429, { error: "リクエストが多すぎます。しばらく待ってから再試行してください" });
     }
     sweep();
-    for (const [id, c] of challenges) if (c.ip === ip) challenges.delete(id);
+    // 同一IPの古い出題は「多すぎる分だけ」捨てる。
+    // 全部消すと、別タブや複数人が同じIP(NAT)から使った時に
+    // 後から出した方以外が全部410になって壊れるため。
+    const mine = [...challenges.values()]
+      .filter((c) => c.ip === ip)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    while (mine.length >= MAX_PER_IP) {
+      const old = mine.shift();
+      challenges.delete(old.id);
+    }
     const c = await makeChallenge();
     if (!c) {
       return sendJson(res, 502, { error: "問題を準備できませんでした。少し待ってからもう一度お試しください" });
     }
     c.ip = ip;
     challenges.set(c.id, c);
+    // 画像URLは自前プロキシ経由の不透明URLで返す(元URL=投稿IDを渡さない)
+    const base = publicBase(req);
     return sendJson(res, 200, {
       id: c.id,
       prompt: c.prompt,
-      tiles: c.tiles.map((t) => ({ id: t.id, url: t.url })),
+      tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),
     });
   }
 
