@@ -559,6 +559,9 @@ async function makeChallenge() {
         const [tb, vb] = tagList[b];
         // 各タグが複数枚に付いていて、両方を持つ画像が1〜3枚ある組み合わせだけ
         if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+        // 片方が他方を含む組み合わせは避ける(例: ライフル / アサルトライフル)。
+        // 見た目で区別できず、片方だけの画像を引っかけにすると人間には不公平になる
+        if (ta.includes(tb) || tb.includes(ta)) continue;
         let both = 0;
         for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
         if (both < 1 || both > 3) continue;
