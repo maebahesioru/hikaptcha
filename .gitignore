@@ -5,3 +5,7 @@ node_modules/
 tools/.venv/
 tools/prompt_candidates.txt
 __pycache__/
+
+# 検証用の一時ファイル(visionレビュー・監査の出力)
+tag_audit/
+*.jpg
