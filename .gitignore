@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+# 辞書ビルド用の作業環境(再生成可能・サイズ大)
+tools/.venv/
+tools/prompt_candidates.txt
+__pycache__/
