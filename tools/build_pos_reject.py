@@ -17,11 +17,25 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 API = "https://hikabooru.hikamers.app/api"
 OUT = "C:/Users/maeba/Desktop/hikamani-captcha/tag_reject.json"
 
+# 辞書が「人名」と判定しても視覚的に判別できる語は除外しない。
+# 実測で誤除外が判明したもの(キャラクター名・物体・生物)を列挙する。
+NOT_PERSON = {
+    # キャラクター名(見た目で判別できる)
+    "マリオ", "ルイージ", "ベジータ", "ピカチュウ", "マスオ", "アリス", "ヨッシー",
+    "クッパ", "ピーチ", "リンク", "ゼルダ", "ソニック", "カービィ", "ドラえもん",
+    # 人名と誤判定される物体・生物・概念(視覚的に有効)
+    "ヨーヨー", "蝶々", "猫娘", "悪魔", "クッキー", "クッキ", "スプライト", "バレンタイン",
+    "ブレーザー", "ブレイザー", "ガーランド", "フェリス", "コス", "チャン",
+}
+
 tag = fugashi.Tagger()
 
 
 def classify(word):
     """1形態素なら品詞で判定。複合語は対象外(辞書の語単位で判定できないため)"""
+    # 視覚的に判別できる語は品詞に関係なく除外しない(誤除外の防止)
+    if word in NOT_PERSON:
+        return None
     try:
         ts = [x for x in tag(word) if x.surface.strip()]
     except Exception:
