@@ -38,7 +38,8 @@
     .hkc-tile {
       position: relative;
       padding: 0;
-      border: 1px solid #52525b;
+      /* 境界を明確にする(ぼかし背景と前景が混ざって見えるのを防ぐ) */
+      border: 2px solid #52525b;
       border-radius: 8px;
       overflow: hidden;
       background: #000;
@@ -46,16 +47,18 @@
       /* 配信画像をクロップせず contain で見せるので、タイルは 3:2 */
       aspect-ratio: 3 / 2;
       display: block;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .6);
       transition: border-color .12s, opacity .12s;
     }
-    /* 背景: 同じ画像を拡大+ぼかして敷き、余白を黒帯ではなく自然に見せる */
+    /* 背景: 同じ画像を拡大+ぼかして敷き、余白を黒帯ではなく自然に見せる。
+       暗めにして前景(はっきりした画像)との境目を作る */
     .hkc-tile .hkc-bg {
       position: absolute;
       inset: 0;
       width: 100%; height: 100%;
       object-fit: cover;
-      filter: blur(10px) brightness(0.55) saturate(1.2);
-      transform: scale(1.15);
+      filter: blur(14px) brightness(0.38) saturate(1.1);
+      transform: scale(1.2);
       display: block;
     }
     /* 前景: 画像全体を切らずに表示(これが本物のタイル) */
