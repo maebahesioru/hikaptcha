@@ -20,9 +20,12 @@
 // 依存パッケージゼロ(Node 18+)。メモリ保持=単一プロセス前提。
 // hikabooru APIは公開なので、本気のボットには解ける(量産スクリプト抑止+コミュニティの遊び目的)。
 import http from "node:http";
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { randomBytes, createHash, timingSafeEqual, scryptSync } from "node:crypto";
+import { readFileSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import { Readable } from "node:stream";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,19 +46,34 @@ const MAX_CHALLENGES = 2000;
 const MAX_PER_IP = 10; // 同一IPで同時に保持する出題の上限(別タブ・同一NAT対策)
 
 // ---- 多層認証のパラメータ ----
-const POW_BITS = Number(process.env.POW_BITS || 14); // Proof-of-Work 難易度(先頭ゼロビット)
-const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 19); // 疑わしいIPへ引き上げる上限
-const MIN_SOLVE_MS = 1200; // 速すぎる回答は機械とみなす(画像を人間が選ぶには最低これくらい要る)
+// PoWは「メモリハード」なscryptを使う(SHA256はGPUで毎秒10^10回規模だが、
+// scryptはメモリ帯域律速のためGPU優位が数桁縮む)。実測(Node):
+//   sha256 120,000回/秒 ⇔ scrypt(N=1024,r=8) 154回/秒 = 1試行あたり約780倍のコスト
+const POW_ALGO = process.env.POW_ALGO || "scrypt"; // scrypt | sha256(後方互換)
+const POW_N = Number(process.env.POW_N || 1024); // scryptのメモリコスト(1MB)
+const POW_R = Number(process.env.POW_R || 8);
+const POW_P = Number(process.env.POW_P || 1);
+const POW_BITS = Number(process.env.POW_BITS || 6); // scrypt出力の先頭ゼロビット
+const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 9);
+const MIN_SOLVE_MS = Number(process.env.MIN_SOLVE_MS || 1500); // サーバー実測の下限(画像を見て選ぶ時間)
 const MIN_HUMAN_MS = 700; // PoW時間を差し引いた「人間の操作時間」の下限
 const HONEYPOT_FIELD = "website"; // ボットが埋めがちな隠しフィールド名
 const RISK_REJECT = 2; // リスク点がこれ以上なら拒否
 const TICKET_TTL_MS = 5 * 60 * 1000;
+// サーバーが観測できる事実に基づくしきい値(クライアント申告と違い偽装できない)
+const IMG_FETCH_MIN_RATIO = 0.75; // 出題画像のうち最低これだけ実際に取得されていること
+const CLAIM_SLACK_MS = 5000; // クライアント申告が実測より大きく超えたら不正とみなす余裕
+// IPごとの「PoW仕事量」予算(期待試行数の累計)。突破速度そのものを頭打ちにする
+const IP_WORK_BUDGET = Number(process.env.IP_WORK_BUDGET || 5000);
+const IP_WORK_WINDOW_MS = 10 * 60 * 1000;
 
-const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip, pow, ticket, sid}
+const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip, pow, ticket, imgFetched}
 const tokens = new Map(); // token -> {exp, ticket}
 const ipCounts = new Map(); // ip -> {n, resetAt}
 const ipSolved = new Map(); // ip -> 累計突破数(難易度の自動引き上げ用)
+const ipWork = new Map(); // ip -> {work, resetAt} 累計PoW仕事量
 const tickets = new Map(); // ticket -> {ip, exp}
+
 
 // ---------- hikabooru API ----------
 
@@ -108,16 +126,52 @@ function leadingZeroBits(buf) {
 
 function powOk(challenge, nonce, bits) {
   if (typeof challenge !== "string" || typeof nonce !== "string") return false;
-  if (nonce.length > 24 || challenge.length > 64) return false;
+  if (nonce.length > 24 || challenge.length > 128) return false;
   if (!/^\d+$/.test(nonce)) return false;
   const h = createHash("sha256").update(challenge + ":" + nonce).digest();
   return leadingZeroBits(h) >= bits;
 }
 
+// メモリハードPoW(scrypt)の検証。クライアントは同じ計算を純JSで行い、
+// サーバーは1回だけ計算して確認する(1試行あたり約780倍のコスト差を作る)
+function powScryptOk(challenge, nonce, salt, bits, N, r, p) {
+  if (typeof challenge !== "string" || typeof nonce !== "string") return false;
+  if (typeof salt !== "string" || !/^[0-9a-f]{32}$/.test(salt)) return false;
+  if (!/^\d{1,8}$/.test(nonce)) return false;
+  const bitsSafe = Math.max(1, Math.min(20, Number(bits) || 1));
+  const Nsafe = Math.max(2, Math.min(65536, Number(N) || 1024));
+  const rsafe = Math.max(1, Math.min(16, Number(r) || 8));
+  const psafe = Math.max(1, Math.min(4, Number(p) || 1));
+  try {
+    const dk = scryptSync(challenge + ":" + nonce, Buffer.from(salt, "hex"), 32, {
+      N: Nsafe, r: rsafe, p: psafe, maxmem: 256 * 1024 * 1024,
+    });
+    return leadingZeroBits(dk) >= bitsSafe;
+  } catch {
+    return false;
+  }
+}
+
+// 累計PoW仕事量(期待試行数)を記録し、予算超過を判定する。
+// 計算資源で突破されても、IPあたりの総仕事量を頭打ちにすれば速度を制限できる
+function chargeWork(ip, bits) {
+  const now = Date.now();
+  const w = ipWork.get(ip);
+  const cost = Math.pow(2, Math.max(0, Math.min(20, bits)));
+  if (!w || now >= w.resetAt) {
+    ipWork.set(ip, { work: cost, resetAt: now + IP_WORK_WINDOW_MS });
+    return true;
+  }
+  if (w.work + cost > IP_WORK_BUDGET) return false;
+  w.work += cost;
+  return true;
+}
+
+
 // 突破実績の多いIPはPoWを重くする(自動化のコストを段階的に上げる)
 function powBitsFor(ip) {
   const solved = ipSolved.get(ip) || 0;
-  const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / 5));
+  const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / 3));
   return POW_BITS + extra;
 }
 
@@ -243,14 +297,79 @@ function goodAspect(p) {
   return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
 }
 
-// 画像プロキシ: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
+// 画像プロキシ + 改変: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
 // 公開APIでタグを引いて正解を機械的に導出できてしまう。不透明IDに置き換えて中継する。
-const images = new Map(); // imgId -> { url, exp }
+// さらに配信時に「余白付与+微小クロップ+回転+再圧縮」で改変する:
+//   実測 pHash距離 37〜41/64 (元画像とは別物として扱われる) / バイト一致もしなくなる
+//   → 事前にbooruを全件スクレイプして作った逆引き索引・完全一致キャッシュが使えなくなる
+//   ※ 被写体は削らない(余白を足すだけ)ので、人間の判別性は落ちない
+const images = new Map(); // imgId -> { url, exp, challengeId, buf, transformed }
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
+const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
-function registerImage(upstreamUrl) {
+// 改変パラメータ(環境変数で調整可)
+const TRANSFORM = process.env.IMG_TRANSFORM !== "0"; // 0で無効化
+const PAD_PCT_MIN = Number(process.env.PAD_MIN || 10);
+const PAD_PCT_MAX = Number(process.env.PAD_MAX || 20);
+const CROP_PCT_MAX = Number(process.env.CROP_MAX || 5);
+const ROT_DEG_MAX = Number(process.env.ROT_MAX || 2);
+const JPEG_Q = Number(process.env.JPEG_Q || 4);
+
+let FFMPEG = null; // 遅延判定(無ければ改変せず素通し)
+function hasFfmpeg() {
+  if (FFMPEG !== null) return FFMPEG;
+  try {
+    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+    FFMPEG = true;
+  } catch {
+    FFMPEG = false;
+    if (TRANSFORM) console.warn("[warn] ffmpeg が見つかりません。画像改変を無効化します(素通し配信)");
+  }
+  return FFMPEG;
+}
+
+const execFileP = promisify(execFile);
+const TMP = mkdtempSync(path.join(tmpdir(), "hkc-img-"));
+let tmpSeq = 0;
+
+// 余白(構図変更)+微小クロップ+回転+再圧縮で「元画像と別物」のJPEGを作る
+async function transformImage(buf) {
+  if (!TRANSFORM || !hasFfmpeg()) return null;
+  const id = (tmpSeq = (tmpSeq + 1) % 100000);
+  const inp = path.join(TMP, `i${id}.jpg`);
+  const out = path.join(TMP, `o${id}.jpg`);
+  writeFileSync(inp, buf);
+  const filters = [];
+  const crop = Math.random() * CROP_PCT_MAX;
+  if (crop > 0.5) {
+    const keep = (100 - crop) / 100;
+    filters.push(`crop=iw*${keep.toFixed(3)}:ih*${keep.toFixed(3)}`);
+  }
+  const pad = PAD_PCT_MIN + Math.random() * Math.max(0, PAD_PCT_MAX - PAD_PCT_MIN);
+  const dark = () => Math.floor(Math.random() * 90); // 暗めのランダム背景(白飛び回避)
+  const bg = `0x${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}`;
+  filters.push(`pad=iw+2*iw*${(pad / 100).toFixed(3)}:ih+2*ih*${(pad / 100).toFixed(3)}:iw*${(pad / 100).toFixed(3)}:ih*${(pad / 100).toFixed(3)}:${bg}`);
+  const rot = (Math.random() * 2 - 1) * ROT_DEG_MAX;
+  if (Math.abs(rot) > 0.2) filters.push(`rotate=${((rot * Math.PI) / 180).toFixed(6)}:fillcolor=${bg}`);
+  try {
+    await execFileP("ffmpeg", ["-y", "-loglevel", "error", "-i", inp, "-vf", filters.join(","), "-q:v", String(JPEG_Q), out], { timeout: 8000 });
+    return readFileSync(out);
+  } catch {
+    return null;
+  } finally {
+    try { unlinkSync(inp); } catch {}
+    try { unlinkSync(out); } catch {}
+  }
+}
+
+function registerImage(upstreamUrl, challengeId) {
   const id = randomBytes(12).toString("hex");
-  images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS });
+  images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS, challengeId, buf: null, transformed: null });
+  if (images.size > IMG_MAX) {
+    // 期限切れ→古い順に捨てる
+    const arr = [...images.entries()].sort((a, b) => a[1].exp - b[1].exp);
+    for (const [k] of arr.slice(0, images.size - IMG_MAX)) images.delete(k);
+  }
   return id;
 }
 
@@ -313,29 +432,32 @@ async function makeChallenge() {
     if (rest.length < GRID_SIZE - targets.length) continue;
     const distractors = shuffle(rest).slice(0, GRID_SIZE - targets.length);
 
+    const cid = randomBytes(8).toString("hex");
+
     const tiles = shuffle([
       ...targets.map((p) => ({
         id: randomBytes(6).toString("hex"),
         postId: p.id,
         url: p.url,
-        imgId: registerImage(p.url), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
+        imgId: registerImage(p.url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
         target: true,
       })),
       ...distractors.map((p) => ({
         id: randomBytes(6).toString("hex"),
         postId: p.id,
         url: p.url,
-        imgId: registerImage(p.url),
+        imgId: registerImage(p.url, cid),
         target: false,
       })),
     ]);
 
     return {
-      id: randomBytes(8).toString("hex"),
+      id: cid,
       prompt: tag,
       createdAt: Date.now(),
       tiles,
       attempts: 0,
+      imgFetched: new Set(), // サーバーが実際に画像配信したタイルID(偽装不能なシグナル)
     };
   }
   return null;
@@ -406,13 +528,29 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // 画像配信: hikabooruのサムネイルを中継する(URLから投稿IDを隠すため)
+  // 画像配信: hikabooruのサムネイルを中継する
+  //  1) URLから投稿IDを隠す(自前の不透明IDで配信)
+  //  2) 配信時に余白付与+微小クロップ+回転+再圧縮で改変(逆検索・事前索引を無効化)
+  //  3) 「この画像が実際に配信された」事実をサーバー側で記録(偽装不能なシグナル)
   if (url.pathname.startsWith("/api/img/") && req.method === "GET") {
     const imgId = url.pathname.slice("/api/img/".length);
     const img = images.get(imgId);
     if (!img || Date.now() > img.exp) {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       return res.end("not found");
+    }
+    // サーバー観測: この画像が配信されたことを出題に記録する
+    const owner = img.challengeId ? challenges.get(img.challengeId) : null;
+    if (owner && owner.imgFetched) owner.imgFetched.add(imgId);
+
+    // 改変済みがあればそれを使う(1回だけ生成して使い回す)
+    if (img.buf) {
+      res.writeHead(200, {
+        "content-type": "image/jpeg",
+        "cache-control": "private, max-age=300",
+        "access-control-allow-origin": "*",
+      });
+      return res.end(img.buf);
     }
     try {
       // ホットリンク判定を避けるため Referer を送らずに取得する
@@ -425,17 +563,17 @@ async function handleApi(req, res, url) {
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         return res.end("upstream error");
       }
+      const orig = Buffer.from(await up.arrayBuffer());
+      const transformed = await transformImage(orig);
+      const body = transformed || orig;
+      img.buf = body; // キャッシュ(同じ出題中は同じ画像を返す)
       res.writeHead(200, {
-        "content-type": up.headers.get("content-type") || "image/jpeg",
+        "content-type": "image/jpeg",
         "cache-control": "private, max-age=300",
         "access-control-allow-origin": "*",
+        "x-hkc-transformed": transformed ? "1" : "0",
       });
-      return await new Promise((resolve) => {
-        const stream = Readable.fromWeb(up.body);
-        stream.pipe(res);
-        stream.on("end", resolve);
-        stream.on("error", () => { try { res.end(); } catch {} resolve(); });
-      });
+      return res.end(body);
     } catch {
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
       return res.end("upstream error");
@@ -467,6 +605,7 @@ async function handleApi(req, res, url) {
     // PoW課題(この出題専用)とチケット(トークン束縛用)を発行
     c.powBits = powBitsFor(ip);
     c.pow = randomBytes(16).toString("hex");
+    c.powSalt = randomBytes(16).toString("hex"); // scrypt用ソルト(毎回ランダム)
     c.ticket = newTicket(ip);
     challenges.set(c.id, c);
     // 画像URLは自前プロキシ経由の不透明URLで返す(元URL=投稿IDを渡さない)
@@ -476,7 +615,16 @@ async function handleApi(req, res, url) {
       prompt: c.prompt,
       tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),
       ticket: c.ticket,
-      pow: { challenge: c.pow, bits: c.powBits, algo: "sha256" },
+      // メモリハードPoW(scrypt)のパラメータ。クライアントは純JSで同じ計算をする
+      pow: {
+        algo: POW_ALGO,
+        challenge: c.pow,
+        salt: c.powSalt,
+        bits: c.powBits,
+        N: POW_N,
+        r: POW_R,
+        p: POW_P,
+      },
       honeypot: HONEYPOT_FIELD,
       minMs: MIN_SOLVE_MS,
     });
@@ -520,8 +668,11 @@ async function handleApi(req, res, url) {
       return sendJson(res, 410, { ok: false, error: "認証セッションが無効です。もう一度やり直してください", expired: true });
     }
 
-    // --- 層3: Proof-of-Work(計算コスト) ---
-    if (!powOk(c.pow, String(body?.nonce ?? ""), c.powBits)) {
+    // --- 層3: Proof-of-Work(メモリハード/scrypt で計算コストを課す) ---
+    const powFun = POW_ALGO === "sha256"
+      ? () => powOk(c.pow, String(body?.nonce ?? ""), c.powBits)
+      : () => powScryptOk(c.pow, String(body?.nonce ?? ""), c.powSalt, c.powBits, POW_N, POW_R, POW_P);
+    if (!powFun()) {
       c.attempts += 1;
       const remaining = MAX_ATTEMPTS - c.attempts;
       if (remaining <= 0) {
@@ -536,20 +687,67 @@ async function handleApi(req, res, url) {
       });
     }
 
-    // --- 層4: 挙動シグナル(リスク点) ---
-    const elapsedMs = Number(body?.elapsedMs) || (Date.now() - c.createdAt);
-    const { risk, reasons } = riskScore(c, body?.signals, elapsedMs);
-    if (risk >= RISK_REJECT) {
+    // --- 層3b: PoW仕事量の予算(計算資源で突破されても総量を頭打ちにする) ---
+    if (!chargeWork(ip, c.powBits)) {
       challenges.delete(id);
-      return sendJson(res, 400, {
+      return sendJson(res, 429, {
         ok: false,
-        error: `機械的な操作を検出しました(${reasons.join("・")})。もう一度やり直してください`,
-        risk,
+        error: "計算認証の試行量が上限に達しました。しばらく待ってから再試行してください",
         expired: true,
       });
     }
 
-    // --- 層5: 画像認証(本題) ---
+    // --- 層4: サーバーが観測した事実(クライアント申告と違い偽装できない) ---
+    // 4a. 画像が実際に配信されたか(スクリプトからの直接POSTは画像を取りに来ない)
+    const fetched = c.imgFetched ? c.imgFetched.size : 0;
+    const needFetch = Math.max(1, Math.ceil(c.tiles.length * IMG_FETCH_MIN_RATIO));
+    if (fetched < needFetch) {
+      challenges.delete(id);
+      return sendJson(res, 400, {
+        ok: false,
+        error: "画像が読み込まれていません。ページを再読み込みしてもう一度お試しください",
+        risk: RISK_REJECT,
+        expired: true,
+      });
+    }
+    // 4b. サーバー実測の経過時間(チャレンジ発行→回答到達)。クライアントは偽装できない
+    const serverElapsed = Date.now() - c.createdAt;
+    if (serverElapsed < MIN_SOLVE_MS) {
+      challenges.delete(id);
+      return sendJson(res, 400, {
+        ok: false,
+        error: "回答が速すぎます。もう一度やり直してください",
+        risk: RISK_REJECT,
+        expired: true,
+      });
+    }
+    // 4c. クライアント申告と実測の矛盾(申告が実測を大きく超えるのは改ざんの証拠)
+    const claimed = Number(body?.elapsedMs) || 0;
+    if (claimed > serverElapsed + CLAIM_SLACK_MS) {
+      challenges.delete(id);
+      return sendJson(res, 400, {
+        ok: false,
+        error: "申告値と実測値が一致しません。もう一度やり直してください",
+        risk: RISK_REJECT,
+        expired: true,
+      });
+    }
+
+    // --- 層5: 挙動シグナル(補助。偽装可能なので単独では拒否理由にしない) ---
+    const { risk, reasons } = riskScore(c, body?.signals, serverElapsed);
+    // サーバー観測で人間と確認できている場合は、クライアント申告の不足を重く見ない
+    const adjustedRisk = Math.max(0, risk - 1);
+    if (adjustedRisk >= RISK_REJECT) {
+      challenges.delete(id);
+      return sendJson(res, 400, {
+        ok: false,
+        error: `機械的な操作を検出しました(${reasons.join("・")})。もう一度やり直してください`,
+        risk: adjustedRisk,
+        expired: true,
+      });
+    }
+
+    // --- 層6: 画像認証(本題) ---
     if (c.attempts >= MAX_ATTEMPTS) {
       challenges.delete(id);
       return sendJson(res, 410, { ok: false, error: "試行回数を超えました。新しい問題に挑戦してください", expired: true });
@@ -565,7 +763,7 @@ async function handleApi(req, res, url) {
       // トークンをチケットに束縛(他人のトークンを流用しても消費できない)
       tokens.set(token, { exp: Date.now() + TOKEN_TTL_MS, ticket: String(body?.ticket || "") });
       ipSolved.set(ip, (ipSolved.get(ip) || 0) + 1);
-      return sendJson(res, 200, { ok: true, token, risk });
+      return sendJson(res, 200, { ok: true, token, risk: adjustedRisk, serverElapsedMs: serverElapsed, imagesFetched: fetched });
     }
 
     c.attempts += 1;

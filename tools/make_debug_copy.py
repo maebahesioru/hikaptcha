@@ -17,7 +17,7 @@ p = os.path.join(DST, "server.mjs")
 s = open(p, encoding="utf-8").read()
 
 old = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),"
-new = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, target: t.target })),"
+new = "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, target: t.target, originalUrl: t.url })),"
 assert old in s, "challenge payload pattern not found"
 s = s.replace(old, new)
 
