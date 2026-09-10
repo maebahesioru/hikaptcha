@@ -21,9 +21,9 @@
 // hikabooru APIは公開なので、本気のボットには解ける(量産スクリプト抑止+コミュニティの遊び目的)。
 import http from "node:http";
 import { randomBytes, createHash, timingSafeEqual, scryptSync } from "node:crypto";
-import { readFileSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, readdirSync, rmdirSync } from "node:fs";
 import { Readable } from "node:stream";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -269,6 +269,12 @@ const PARTICLE_IN = /[をが]/;
 const STOP_TAG = /ください|チェック|翻訳|依頼|解説|説明|聞いてみ|なので|じゃない|です|ます|ました|じゃん|ってしま|どうぞ|の巻|つけよう/;
 // 広すぎる/抽象的すぎるタグ(ほぼ全画像につく等)はお題にしない
 const EXCLUDE_TAGS = new Set([
+  // 素材・抽象語は「付随的に写る」ため誤判定を生む。
+  // 実測: 「ガラス」→ 真実2枚に対しvisionは5枚を該当と判定
+  //       (水槽=アクリル/窓/テレビ画面/瓶まで拾ってしまう)。
+  //       「ハート」も髪飾り等の微小な要素で判定が割れた。
+  "ガラス", "透明", "金属", "プラスチック", "木材", "素材", "質感", "光", "影",
+  "反射", "柄", "模様", "文字", "テキスト", "ロゴ", "記号", "色", "線", "背景",
   "男性", "女性", "実写", "現実の生活", "現実的で", "写真背景", "複数の視点",
   "字幕", "ミーム", "おじいちゃん向けコンテンツ", "なんだって", "食べ物",
   "1人の少年", "2人の男児", "立ち姿", "人物", "人々", "人間の", "子供", "少女",
@@ -407,6 +413,12 @@ function goodAspect(p) {
 //   → 事前にbooruを全件スクレイプして作った逆引き索引・完全一致キャッシュが使えなくなる
 //   ※ 余白は控えめ(6〜9%)にして被写体の占有率を約85%確保し、タイルの見やすさを優先する
 const images = new Map(); // imgId -> { url, exp, challengeId, buf, transformed }
+// 視覚フィルタで事前取得した画像のキャッシュ(url -> {buf, exp})。
+// フィルタのダウンロードを無駄にせず、クライアント配信時はここから返して即応答にする。
+const prefetched = new Map();
+
+// 品質フィルタの効き具合を測るための統計(チューニング用。/api/health で見られる)
+const stats = { challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [] };
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
@@ -536,12 +548,150 @@ async function fetchRandomImageBatch(limit, level = 0) {
 //  2タグAND … 「◯◯と△△の両方が写っている画像を全部選べ」(正解=両方のタグを持つ画像)
 // 実測で「お題タグは1つに限らなくてよい」という方針に基づき、2タグの組み合わせも出題する。
 // これで出題のバリエーションが増え、ボット側は2つの対象を照合する必要があるため難度も上がる。
-const PAIR_PROB = Number(process.env.PAIR_PROB || 0.35); // 2タグ出題にする確率
+// 実測(2026-09): 2タグAND出題は vision検証4件すべてで成立しなかった。
+//   「ビーニー×野球帽」→ 真実2枚に対しvisionは7枚が該当(誤漏れ5枚)
+//   「ジュースボックス×モグラ」→ 真実2枚ともvisionは「該当なし」(誤付与)
+//   AIタグ付けの誤付与どうしの重なりで作られるため、両方が本当に写っている画像はほぼ無い。
+// 解けないCAPTCHAはロボットより人間を弾くので、既定では無効にする。
+// PAIR_PROB=0.2 のように環境変数で有効化できる(品質よりバリエーションを優先する場合)。
+const PAIR_PROB = Number(process.env.PAIR_PROB || 0); // 2タグ出題にする確率
+
+// --- 視覚的な見分けやすさフィルタ ---
+// タグの重なりでは検出できない不公平を、画像そのものの類似度で捕まえる。
+//  実測の失敗例: 「長袖」で同じ人物の雪山ジャケット連続写真8枚のうちタグは2枚だけ。
+//  visionは8枚すべてを長袖と判定 → 人間には区別できず、正解を選べない。
+// 画像を8x8グレースケールの64bit署名にしてハミング距離で比べ、
+//  「ダミーが正解同士より似ている(距離比>=1.0)」出題は捨てる。
+// 依存ゼロを維持するため ffmpeg の rawvideo 出力だけを使う。
+const VIS_FILTER = process.env.VIS_FILTER !== "0"; // VIS_FILTER=0 で無効化
+const VIS_MAX_DIST_RATIO = Number(process.env.VIS_MAX_DIST_RATIO || 1.0);
+
+// 9枚を「1回のffmpeg」でまとめて8x8署名にする(9プロセス起動は約700msかかるため)。
+// 縦に連結(vstack)して576バイトを一括で受け取り、64バイトずつ切り分ける。
+function sigs8x8Batch(bufs) {
+  return new Promise((resolve) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hkcvis-"));
+    try {
+      const files = bufs.map((b, i) => {
+        const f = path.join(dir, `i${i}.jpg`);
+        writeFileSync(f, b);
+        return f;
+      });
+      const args = ["-v", "error"];
+      for (const f of files) args.push("-i", f);
+      const parts = bufs.map((_, i) => `[${i}:v]scale=8:8,format=gray[a${i}]`).join(";");
+      const stack = bufs.map((_, i) => `[a${i}]`).join("") + `vstack=inputs=${bufs.length}[out]`;
+      args.push(
+        "-filter_complex", `${parts};${stack}`,
+        "-map", "[out]", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"
+      );
+      const p = spawn("ffmpeg", args);
+      const chunks = [];
+      p.stdout.on("data", (d) => chunks.push(d));
+      p.on("close", (code) => {
+        const out = Buffer.concat(chunks);
+        const need = bufs.length * 64;
+        if (code !== 0 || out.length < need) return resolve(null);
+        const sigs = [];
+        for (let i = 0; i < bufs.length; i++) {
+          const px = [...out.subarray(i * 64, i * 64 + 64)];
+          const mean = px.reduce((a, c) => a + c, 0) / 64;
+          sigs.push(px.map((v) => (v > mean ? 1 : 0)));
+        }
+        resolve(sigs);
+      });
+      p.on("error", () => resolve(null));
+    } catch {
+      resolve(null);
+    } finally {
+      setTimeout(() => {
+        try {
+          for (const f of readdirSync(dir)) unlinkSync(path.join(dir, f));
+          rmdirSync(dir);
+        } catch {}
+      }, 3000);
+    }
+  });
+}
+
+// 距離比(大きいほど見分けにくい)を返す。判定不能なら null(フィルタは素通し)。
+async function distanceRatio(pairs) {
+  if (!VIS_FILTER || pairs.length !== 9) return null;
+  try {
+    const bufs = await Promise.all(
+      pairs.map(async (p) => {
+        try {
+          const r = await fetch(p.url, {
+            headers: { "user-agent": "hikamani-captcha/1.0" },
+            signal: AbortSignal.timeout(4000),
+            cache: "no-store",
+          });
+          if (!r.ok) return null;
+          const b = Buffer.from(await r.arrayBuffer());
+          // 事前取得分をキャッシュして、配信時に使い回す(無駄な再ダウンロードを防ぐ)
+          if (prefetched.size > 400) prefetched.clear();
+          prefetched.set(p.url, { buf: b, exp: Date.now() + 120000 });
+          return b;
+        } catch {
+          return null;
+        }
+      })
+    );
+    if (bufs.some((b) => !b)) return null;
+    const sigs = await sigs8x8Batch(bufs);
+    if (!sigs || sigs.some((s) => !s)) return null;
+    const ham = (a, b) => {
+      let d = 0;
+      for (let i = 0; i < 64; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+    const tg = pairs.map((p, i) => (p.target ? i : -1)).filter((i) => i >= 0);
+    const dm = pairs.map((p, i) => (p.target ? -1 : i)).filter((i) => i >= 0);
+    if (tg.length < 2 || !dm.length) return null;
+    // ① 正解同士の平均距離と、ダミーが正解に寄る距離の比(平均ベース)
+    let tt = 0, n = 0, minTT = 999;
+    for (let a = 0; a < tg.length; a++)
+      for (let b = a + 1; b < tg.length; b++) {
+        const d = ham(sigs[tg[a]], sigs[tg[b]]);
+        tt += d; n++;
+        if (d < minTT) minTT = d;
+      }
+    tt = n ? tt / n : 0;
+    // ② 最短ペアでの比較(平均は「同じ画像が複数ある」場合に歪むため、最短で見る)
+    let dd = 0, minDT = 999;
+    for (const d of dm) {
+      let m = 999;
+      for (const t of tg) m = Math.min(m, ham(sigs[d], sigs[t]));
+      dd += m;
+      if (m < minDT) minDT = m;
+    }
+    dd = dd / dm.length;
+    const meanRatio = tt / Math.max(1, dd);
+    // 見分け不能と判定する条件(実測で調整):
+    //   ⚠️ 最小値同士の比較は統計的に歪む(ダミーは63ペア、正解同士は1ペア →
+    //      最小値は必ずダミー側が小さくなる)。平均同士で比べる。
+    //   ⚠️ 閾値を厳しくしすぎると大半の出題が弾かれ、緩和レベル(品質フィルタOFF)に
+    //      落ちて実質無効になる(実測: 0.9で却下が94%、緩和レベルに22/30が流出)。
+    //      明らかに不公平な場合だけ落とす控えめな値にする(実測0.7で約1割)。
+    //   a) ダミーの「最も近い正解との距離」の平均が、正解同士の平均距離より明確に近い
+    //      (= ダミーは正解と同程度に似ている → 人間には区別できない)
+    //   b) ダミーが正解とほぼ同一画像(距離3以下)
+    const unfair = dd < tt * 0.7 || minDT <= 3;
+    // チューニング用: 実際の距離の値を残す(/api/health の stats.lastVis で見られる)
+    stats.lastVis.push({ tt: +tt.toFixed(1), dd: +dd.toFixed(1), minDT, minTT, unfair });
+    if (stats.lastVis.length > 15) stats.lastVis.shift();
+    if (!unfair) return null;
+    return Math.max(1.0, meanRatio, minDT <= 3 ? 2.0 : 0);
+  } catch {
+    return null; // 取得失敗時はフィルタせず出題する(可用性優先)
+  }
+}
 
 async function makeChallenge() {
   // フィルタを段階的に緩める(厳しいフィルタで出題できない場合に品質より可用性を優先)。
   // 段階0=厳しい(スクショ除外+タグ数制限) / 1=スクショ除外のみ / 2=制限なし+候補条件も緩和
   const LEVELS = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2];
+  let visRejects = 0; // 視覚フィルタで却下した回数(閾値を段階的に緩めるのに使う)
   for (let i = 0; i < LEVELS.length; i++) {
     const level = LEVELS[i];
     const relaxed = level >= 2;
@@ -640,22 +790,29 @@ async function makeChallenge() {
 
     // --- 一貫性フィルタ: 正解候補から「浮いた1枚」を除く ---
     // AIタグ付けの誤付与(例: 商品の箱だけの画像に「カーディガン」)は、
-    // 他の正解画像と共通のタグを持たないことが多い(実測で確認)。
-    // 正解候補同士が共有するタグを1つも持たない画像は誤付与とみなして落とす。
-    if (targetIdxs.length >= 2) {
-      const self = promptTags.map((t) => t);
-      const others = (idx) => [...batch[idx].tags].filter((t) => !self.includes(t));
-      const coherent = targetIdxs.filter((idx) => {
-        const mine = new Set(others(idx));
-        // 他の正解候補のどれかと、お題以外のタグを1つ以上共有しているか
-        for (const other of targetIdxs) {
-          if (other === idx) continue;
-          for (const t of others(other)) if (mine.has(t)) return true;
-        }
-        return false;
+    // 他の正解画像と「意味のあるタグ」を共有しないことが多い(実測で確認)。
+    // ⚠️ 実測の落とし穴: ゴミタグ(11 / なんだって / おじいちゃん向けコンテンツ 等)は
+    //    ほぼ全画像に付くため、それを共通タグとして数えるとフィルタが機能しない。
+    //    お題タグと同じ基準(questionableTag)を通る意味のあるタグだけを使う。
+    const meaningful = (p) => [...p.tags].filter((t) => questionableTag(t, p.tagU.get(t) || 0));
+    if (targetIdxs.length >= 3) {
+      const sets = targetIdxs.map((idx) => new Set(meaningful(batch[idx]).filter((t) => !promptTags.includes(t))));
+      const jac = (A, B) => {
+        let inter = 0;
+        for (const x of A) if (B.has(x)) inter++;
+        return inter / new Set([...A, ...B]).size;
+      };
+      const avgs = sets.map((s, i) => {
+        let sum = 0;
+        for (let j = 0; j < sets.length; j++) if (j !== i) sum += jac(s, sets[j]);
+        return sum / (sets.length - 1);
       });
-      // 一貫した組が1つでも残るなら、それを正解にする(誤付与の孤立画像を落とす)
-      if (coherent.length >= 1) targetIdxs = coherent;
+      const mean = avgs.reduce((a, b) => a + b, 0) / avgs.length;
+      if (mean > 0) {
+        // 平均の60%未満しか似ていない正解は「浮いた1枚」として落とす
+        const kept = targetIdxs.filter((_, i) => avgs[i] >= mean * 0.6);
+        if (kept.length >= 2) targetIdxs = kept;
+      }
     }
     if (!targetIdxs.length) continue;
 
@@ -665,15 +822,75 @@ async function makeChallenge() {
     const needs = GRID_SIZE - targetSet.size;
     if (needs < 1) continue;
 
-    // ダミーは「片方だけ持つ画像(最大6割)」+「どちらも持たない画像」で構成
-    const trapTake = shuffle([...trapSet]).slice(0, Math.min(trapSet.size, Math.ceil(needs * 0.6)));
-    const rest = [];
+    // ダミー候補のプール(片方だけ持つ画像 + どちらも持たない画像)
+    const trapAll = [...trapSet];
+    const restAll = [];
     for (let idx = 0; idx < batch.length; idx++) {
-      if (!targetSet.has(idx) && !trapTake.includes(idx)) rest.push(idx);
+      if (!targetSet.has(idx) && !trapSet.has(idx)) restAll.push(idx);
     }
+    const poolAll = [...trapAll, ...restAll];
+    if (poolAll.length < needs) continue;
+
+    // --- 見分けやすさフィルタ(実測で導入) ---
+    // ダミー画像が正解とタグを同程度共有していると、人間には見分けがつかない。
+    // (実測: 「青いシャツ」で同じキャラの紺Tシャツが7枚あるのにタグは2枚だけ →
+    //  visionは7枚を正解と判定し真実と食い違った。この比が1.02〜1.23だった)
+    // 正解同士の平均類似度に対するダミーの類似度の比が高すぎる出題は捨てる。
+    if (targetIdxs.length >= 2 && poolAll.length >= needs) {
+      const jac = (a, b) => {
+        const A = new Set(a), B = new Set(b);
+        let inter = 0;
+        for (const x of A) if (B.has(x)) inter++;
+        return inter / new Set([...A, ...B]).size;
+      };
+      // ゴミタグを除外して比較する(全画像共通のタグで誤判定しないため)
+      const strip = (p) => meaningful(p).filter((t) => !promptTags.includes(t));
+      const tSets = targetIdxs.map((idx) => strip(batch[idx]));
+      let tt = 0, ttN = 0;
+      for (let a = 0; a < tSets.length; a++) {
+        for (let b = a + 1; b < tSets.length; b++) { tt += jac(tSets[a], tSets[b]); ttN++; }
+      }
+      tt = ttN ? tt / ttN : 0;
+      let dm = 0;
+      for (const idx of poolAll) {
+        const d = strip(batch[idx]);
+        let m = 0;
+        for (const t of tSets) m = Math.max(m, jac(d, t));
+        dm += m;
+      }
+      dm = dm / poolAll.length;
+      const unfair = dm / Math.max(0.02, tt);
+      // 段階2(緩和レベル)では品質フィルタを外して可用性を優先する
+      if (!relaxed && unfair >= 0.85) { stats.tagRejects++; continue; } // 見分け不能な出題は捨てて次のバッチへ
+    }
+
+    // ダミーは「片方だけ持つ画像(最大6割)」+「どちらも持たない画像」で構成
+    const trapTake = shuffle(trapAll).slice(0, Math.min(trapAll.length, Math.ceil(needs * 0.6)));
+    const rest = restAll.filter((idx) => !trapTake.includes(idx));
     const need2 = needs - trapTake.length;
     if (rest.length < need2) continue;
     const distractorIdxs = [...trapTake, ...shuffle(rest).slice(0, need2)];
+
+    // --- 視覚フィルタ: 画像そのものが似すぎている出題を捨てる ---
+    // タグの重なり(上のフィルタ)では捕まらない型の不公平をここで落とす。
+    // 判定不能(null)なら素通しする(可用性優先)。
+    // 段階2(緩和レベル)では外す(4回の緩和試行があるので必ず出題できる)。
+    // それでも却下が続く場合は閾値を段階的に緩める(1.0→1.12→1.24…)。
+    if (!relaxed) {
+      const visPairs = [
+        ...[...targetSet].map((idx) => ({ url: batch[idx].url, target: true })),
+        ...distractorIdxs.map((idx) => ({ url: batch[idx].url, target: false })),
+      ];
+      const dr = await distanceRatio(visPairs);
+      if (dr !== null) stats.visChecked++;
+      // dr は「見分け不能」と判定されたときだけ 1.0以上 の深刻度で返る。
+      // 却下が続く場合は閾値を段階的に緩める(1.0→1.12→1.24…)ので最後は通る。
+      if (dr !== null && dr >= VIS_MAX_DIST_RATIO + 0.12 * visRejects) {
+        visRejects++;
+        stats.visRejects++;
+        continue;
+      }
+    }
 
     const cid = randomBytes(8).toString("hex");
 
@@ -684,6 +901,9 @@ async function makeChallenge() {
         url: batch[idx].url,
         imgId: registerImage(batch[idx].url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
         target: true,
+        // 診断用にタグを保持する。応答には含めない(本番のpayloadはid/urlのみ)。
+        // テスト用コピーだけがこれを応答に載せ、精度検証に使う。
+        tags: [...batch[idx].tags],
       })),
       ...distractorIdxs.map((idx) => ({
         id: randomBytes(6).toString("hex"),
@@ -691,9 +911,12 @@ async function makeChallenge() {
         url: batch[idx].url,
         imgId: registerImage(batch[idx].url, cid),
         target: false,
+        tags: [...batch[idx].tags],
       })),
     ]);
 
+    stats.challenges++;
+    if (relaxed) stats.relaxedUsed++;
     return {
       id: cid,
       prompt: promptTags.join(" × "), // 表示用(2タグなら「A × B」)
@@ -770,7 +993,7 @@ async function readBody(req) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === "/api/health" && req.method === "GET") {
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, { ok: true, stats });
   }
 
   // 画像配信: hikabooruのサムネイルを中継する
@@ -798,6 +1021,21 @@ async function handleApi(req, res, url) {
       return res.end(img.buf);
     }
     try {
+      // 視覚フィルタで事前取得済みならそれを使う(再ダウンロードしない)
+      const pf = prefetched.get(img.url);
+      if (pf && Date.now() < pf.exp) {
+        const transformed = await transformImage(pf.buf);
+        const body = transformed || pf.buf;
+        img.buf = body;
+        res.writeHead(200, {
+          "content-type": "image/jpeg",
+          "cache-control": "private, max-age=300",
+          "access-control-allow-origin": "*",
+          "x-hkc-transformed": transformed ? "1" : "0",
+          "x-hkc-prefetched": "1",
+        });
+        return res.end(body);
+      }
       // ホットリンク判定を避けるため Referer を送らずに取得する
       const up = await fetch(img.url, {
         headers: { "user-agent": "hikamani-captcha/1.0" },
@@ -1070,10 +1308,19 @@ const server = http.createServer(async (req, res) => {
     const ext = path.extname(full);
     res.writeHead(200, { "content-type": MIME[ext] || "application/octet-stream", "cache-control": "no-store" });
     res.end(data);
-  } catch {
+  } catch (err) {
+    // APIの例外を「404 not found」で隠していた(原因追跡が不可能になる)ので修正。
+    // ログに出し、APIには500を返す(静的ファイルのみ404)。
+    const isApi = url.pathname.startsWith("/api/");
+    console.error("[request error]", url.pathname, err && err.stack ? err.stack.split("\n")[0] : err);
     if (!res.headersSent) {
-      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      res.end("not found");
+      if (isApi) {
+        res.writeHead(500, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*" });
+        res.end(JSON.stringify({ error: "サーバー内部エラーが発生しました" }));
+      } else {
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        res.end("not found");
+      }
     } else {
       res.end();
     }
@@ -1083,6 +1330,23 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`ヒカマニCAPTCHA ready on http://localhost:${PORT} (hikabooru: ${HIKABOORU_BASE})`);
   console.log(`  多層認証: 画像 + PoW(${POW_BITS}bit〜${POW_BITS_MAX}bit) + ハニーポット + 挙動判定 + チケット束縛`);
+  // 自己診断: SELFTEST=1 で出題生成を1回だけ試して結果を出し、終了する
+  // (本番を起動せずに出題ロジックの異常を検知できる)
+  if (process.env.SELFTEST === "1") {
+    makeChallenge()
+      .then((c) => {
+        if (!c) {
+          console.error("[selftest] 出題を生成できませんでした(候補不足)");
+          process.exit(2);
+        }
+        console.log(`[selftest] OK: 「${c.prompt}」 mode=${c.mode} 正解${c.tiles.filter((t) => t.target).length}枚/9`);
+        process.exit(0);
+      })
+      .catch((err) => {
+        console.error("[selftest] 例外:", err && err.stack ? err.stack : err);
+        process.exit(3);
+      });
+  }
 });
 
 // 1件の失敗(画像取得のタイムアウト等)でCAPTCHAサービス全体を落とさない
