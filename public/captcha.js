@@ -274,23 +274,22 @@
     function draw() {
       box.textContent = "";
       box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
-      if (ch && ch.prompt && !busy) {
-        const tags = Array.isArray(ch.tags) && ch.tags.length ? ch.tags : [ch.prompt];
+      if (ch && (ch.ask || ch.prompt) && !busy) {
+        const text = (ch.ask && ch.ask.text) || ch.prompt;
         const p = el("p", "hkc-prompt");
-        p.appendChild(document.createTextNode("下の画像の中から「"));
-        tags.forEach(function (t, i) {
-          if (i > 0) p.appendChild(document.createTextNode("」と「"));
-          const b = el("b"); b.textContent = t; p.appendChild(b);
-        });
-        p.appendChild(document.createTextNode("」"));
-        if (tags.length > 1) {
-          const both = el("b", "all"); both.textContent = "の両方"; p.appendChild(both);
-          p.appendChild(document.createTextNode("が写っている画像を"));
-        } else {
-          p.appendChild(document.createTextNode("の画像を"));
+        p.appendChild(document.createTextNode("下の画像の中から"));
+        // 「◯◯」=お題のタグ(青) / 「全部」「◯枚だけ」=強調(黄) に色を付ける
+        const re = /「[^」]*」|全部|\d+枚だけ/g;
+        let last = 0, m;
+        while ((m = re.exec(text))) {
+          if (m.index > last) p.appendChild(document.createTextNode(text.slice(last, m.index)));
+          const t = m[0];
+          const b = el("b", t === "全部" || /\d+枚だけ/.test(t) ? "all" : "");
+          b.textContent = t;
+          p.appendChild(b);
+          last = m.index + t.length;
         }
-        const all = el("b", "all"); all.textContent = "全部"; p.appendChild(all);
-        p.appendChild(document.createTextNode("選んでください"));
+        if (last < text.length) p.appendChild(document.createTextNode(text.slice(last)));
         box.appendChild(p);
       }
       if (!ch) {
@@ -323,9 +322,23 @@
         btn.addEventListener("click", function () {
           if (busy) return;
           sig.interactionSeen = true; sig.clicks++;
-          if (sel.has(t.id)) sel.delete(t.id); else sel.add(t.id);
-          btn.classList.toggle("sel", sel.has(t.id));
-          btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
+          const limit = (ch && ch.ask && ch.ask.maxSelect) || 0;
+          if (limit === 1) {
+            // 「1枚だけ選べ」の問題はラジオのように選択が移る
+            sel.clear();
+            sel.add(t.id);
+            grid.querySelectorAll(".hkc-tile").forEach(function (b) {
+              const on = b === btn;
+              b.classList.toggle("sel", on);
+              b.setAttribute("aria-pressed", on ? "true" : "false");
+            });
+          } else {
+            // 「◯枚だけ選べ」を超える選択は無視する(選び直すには外してから押す)
+            if (!sel.has(t.id) && limit > 0 && sel.size >= limit) return;
+            if (sel.has(t.id)) sel.delete(t.id); else sel.add(t.id);
+            btn.classList.toggle("sel", sel.has(t.id));
+            btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
+          }
           const okBtn = box.querySelector(".hkc-btn.ok");
           if (okBtn) okBtn.disabled = sel.size === 0;
         });

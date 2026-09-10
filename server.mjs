@@ -418,7 +418,11 @@ const images = new Map(); // imgId -> { url, exp, challengeId, buf, transformed 
 const prefetched = new Map();
 
 // 品質フィルタの効き具合を測るための統計(チューニング用。/api/health で見られる)
-const stats = { challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [] };
+const stats = {
+  challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [], modes: {},
+  // 出題生成の失敗理由(チューニング用。attempts=試行回数の合計)
+  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0,
+};
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
@@ -554,7 +558,74 @@ async function fetchRandomImageBatch(limit, level = 0) {
 //   AIタグ付けの誤付与どうしの重なりで作られるため、両方が本当に写っている画像はほぼ無い。
 // 解けないCAPTCHAはロボットより人間を弾くので、既定では無効にする。
 // PAIR_PROB=0.2 のように環境変数で有効化できる(品質よりバリエーションを優先する場合)。
-const PAIR_PROB = Number(process.env.PAIR_PROB || 0); // 2タグ出題にする確率
+// --- 出題形式(種類) ---
+// 出題の種類 = {タグを持つ|持たない} × {全部|N枚} と、2タグの AND / OR。
+//   single 「◯◯の画像を全部選べ」          … 持つ × 全部
+//   pick   「◯◯が写っている画像を◯枚だけ」 … 持つ × N枚
+//   not    「◯◯が写っていない画像を全部」   … 持たない × 全部
+//   notpick「◯◯が写っていない画像を◯枚だけ」… 持たない × N枚
+//   or     「◯◯または△△が写っている画像を全部」
+//   and    「◯◯と△△の両方が写っている画像を全部」(実測で成立しなかったため既定0)
+// 重みは MODE_WEIGHTS="single=3,not=2,pick=2,or=1" で調整できる(重み0で無効化)。
+// 実測(2026-09): 形式ごとに人間が解けるかをvisionで採点して重みを決めている(README参照)。
+const MODE_WEIGHTS = (() => {
+  // 既定の重みは実測(各形式をvisionで採点)に基づく:
+  //   not    … 実測2件で良好(8枚中8枚一致/7枚一致+ダミーを正しく指摘)。ダミー1枚を探す形は人間に明確
+  //   single … 従来の基準形式
+  //   notpick… 「1枚だけ◯◯がない」は仲間外れとして視覚的に明確(完全一致)。ただし誤漏れに弱い
+  //   pick   … 「◯枚だけ」は枚数固定のためタグ1つの誤りが即不正解(実測3件すべてで1枚ずれ)
+  //   or     … ダミーが2つのタグ両方を持たない必要があり、誤漏れに弱い(実測で余分な正解が出た)
+  //   and    … AIタグ付けでは成立しない(過去に実測4件すべて失敗)
+  // pick / or / and を増やしたい場合は MODE_WEIGHTS を指定する
+  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,and=0";
+  const m = new Map();
+  for (const part of raw.split(",")) {
+    const [k, v] = part.split("=");
+    if (k && k.trim()) m.set(k.trim(), Math.max(0, Number(v || 0)));
+  }
+  // 旧名(互換): PAIR_PROB は and の重み(×10)として扱う
+  if (process.env.PAIR_PROB !== undefined) m.set("and", Math.round(Number(process.env.PAIR_PROB) * 10));
+  return m;
+})();
+const FORCE_MODE = process.env.FORCE_MODE || null; // 検証用に形式を固定する
+
+// お題タグの最低使用回数。実測(40バッチ・11855件)で「バッチ内1〜3枚に付くタグ」の
+// 半数は usages≦53 のOCRノイズ(例: 明治安B / グラタ / Mondu)だった。
+// そうしたタグは画像と対応しておらず解けない問題になるので、候補から外す。
+// 実測: 150 で約55%のタグが消えるが、候補数は十分残る(4枚以上の帯は中央3631)。
+const TAG_MIN_USAGES = Number(process.env.TAG_MIN_USAGES || 150);
+
+// 1回に取る画像の枚数。フィルタで落ちる分を見込んで多めに取る
+// (実測: 20枚だと9枚に足りない空振りが多発し、API往復で出題が遅くなっていた)。
+const BATCH_LIMIT = Number(process.env.BATCH_LIMIT || 60);
+
+function chooseMode() {
+  if (FORCE_MODE) return FORCE_MODE;
+  const roulette = [];
+  for (const [m, w] of MODE_WEIGHTS) for (let i = 0; i < w; i++) roulette.push(m);
+  if (!roulette.length) return "single";
+  return roulette[Math.floor(Math.random() * roulette.length)];
+}
+
+// 出題の「聞き方」。クライアントはこの文面をそのまま表示する(埋め込み側の見た目も揃う)
+function buildAsk(mode, tags, n) {
+  const [a, b] = tags;
+  switch (mode) {
+    case "not":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」が写っていない画像を全部選んでください` };
+    case "pick":
+      return { mode, tags, n, maxSelect: n, text: `「${a}」が写っている画像を${n}枚だけ選んでください` };
+    case "notpick":
+      return { mode, tags, n, maxSelect: n, text: `「${a}」が写っていない画像を${n}枚だけ選んでください` };
+    case "or":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」または「${b}」が写っている画像を全部選んでください` };
+    case "and":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」と「${b}」の両方が写っている画像を全部選んでください` };
+    default:
+      return { mode: "single", tags, n: 0, maxSelect: 0, text: `「${a}」の画像を全部選んでください` };
+  }
+}
+
 
 // --- 視覚的な見分けやすさフィルタ ---
 // タグの重なりでは検出できない不公平を、画像そのものの類似度で捕まえる。
@@ -647,7 +718,7 @@ async function distanceRatio(pairs) {
     };
     const tg = pairs.map((p, i) => (p.target ? i : -1)).filter((i) => i >= 0);
     const dm = pairs.map((p, i) => (p.target ? -1 : i)).filter((i) => i >= 0);
-    if (tg.length < 2 || !dm.length) return null;
+    if (!tg.length || !dm.length) return null;
     // ① 正解同士の平均距離と、ダミーが正解に寄る距離の比(平均ベース)
     let tt = 0, n = 0, minTT = 999;
     for (let a = 0; a < tg.length; a++)
@@ -676,7 +747,10 @@ async function distanceRatio(pairs) {
     //   a) ダミーの「最も近い正解との距離」の平均が、正解同士の平均距離より明確に近い
     //      (= ダミーは正解と同程度に似ている → 人間には区別できない)
     //   b) ダミーが正解とほぼ同一画像(距離3以下)
-    const unfair = dd < tt * 0.7 || minDT <= 3;
+    // 正解が1枚だけの形式は、その1枚が他の8枚と視覚的に区別できることを要求する
+    // (区別できなければ人間には探せず「解けないCAPTCHA」になる)。
+    const singleTargetUnfair = tg.length === 1 && minDT < 10;
+    const unfair = dd < tt * 0.7 || minDT <= 3 || singleTargetUnfair;
     // チューニング用: 実際の距離の値を残す(/api/health の stats.lastVis で見られる)
     stats.lastVis.push({ tt: +tt.toFixed(1), dd: +dd.toFixed(1), minDT, minTT, unfair });
     if (stats.lastVis.length > 15) stats.lastVis.shift();
@@ -695,8 +769,19 @@ async function makeChallenge() {
   for (let i = 0; i < LEVELS.length; i++) {
     const level = LEVELS[i];
     const relaxed = level >= 2;
-    const batch = await fetchRandomImageBatch(20, level);
-    if (batch.length < GRID_SIZE) continue;
+    // 形式を先に決めてからバッチを取る。notpick は「タグがグリッドをほぼ埋める」画像が要るため多めに取る
+    const mode = chooseMode();
+    const firstLimit = mode === "notpick" ? Math.max(60, BATCH_LIMIT) : BATCH_LIMIT;
+    let batch = await fetchRandomImageBatch(firstLimit, level);
+    stats.attempts++;
+    // 実測: フィルタ通過率が低く、30枚取っても9枚に足りないことが多い(空振りの53%)。
+    // 足りないときは1回だけ取得枚数を倍にして取り直す(level 0〜1の再利用で往復を減らす)。
+    if (batch.length < GRID_SIZE) {
+      stats.fShortBatch++;
+      batch = await fetchRandomImageBatch(Math.max(100, firstLimit * 2), level);
+      stats.attempts++;
+      if (batch.length < GRID_SIZE) { stats.fShortBatch++; continue; }
+    }
 
     // タグごとに「どの画像に付いているか」を保持(2タグの組み合わせ判定に使う)
     const byTag = new Map(); // tag -> {usages, imgs:Set<index>}
@@ -711,82 +796,129 @@ async function makeChallenge() {
       }
     }
 
-    // --- 2タグANDの候補を作る ---
-    const pairCands = [];
-    const tagList = [...byTag.entries()];
-    for (let a = 0; a < tagList.length; a++) {
-      for (let b = a + 1; b < tagList.length; b++) {
-        const [ta, va] = tagList[a];
-        const [tb, vb] = tagList[b];
-        // 各タグが複数枚に付いていて、両方を持つ画像がある組み合わせだけ
-        if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
-        // 片方が他方を含む組み合わせは避ける(例: ライフル / アサルトライフル)。
-        // 見た目で区別できず、片方だけの画像を引っかけにすると人間には不公平になる
-        if (ta.includes(tb) || tb.includes(ta)) continue;
-        let both = 0;
-        for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
-        const bothMin = 2; // 「両方を持つ画像」が2枚以上=組み合わせが実在するとみなす
-        const bothMax = relaxed ? 4 : 3;
-        if (both < bothMin || both > bothMax) continue;
-        const union = new Set([...va.imgs, ...vb.imgs]).size;
-        if (!relaxed && union > 8) continue; // 広すぎる(ダミーが作れない)
-        pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
-      }
-    }
-
-    // --- 単一タグの候補 ---
-    // 出現回数(=同じバッチで何枚に付いているか)が多いタグほど「その画像の主題」である確率が高い。
-    // 実測: 出現2枚のタグは誤付与(例: 電車の画像に「バッグ」)が混ざり、正解が人間に見て分からない問題になった。
-    // そこで出現数の多いタグを強く優先し、可能なら3枚以上に付くタグだけを使う。
-    const singleCands = [];
-    const singleMax = relaxed ? 6 : 5;
-    const singleMin = relaxed ? 2 : 3; // 厳しい段階では3枚以上(誤付与を避ける)
-    for (const [tag, v] of byTag) {
-      if (v.imgs.size >= singleMin && v.imgs.size <= singleMax) {
-        singleCands.push({ tag, n: v.imgs.size, usages: v.usages });
-      }
-    }
-    // 3枚以上の候補が無い場合は2枚も許容(出題不能を避ける)
-    if (!singleCands.length) {
-      for (const [tag, v] of byTag) {
-        if (v.imgs.size === 2) singleCands.push({ tag, n: 2, usages: v.usages });
-      }
-    }
-
-    const usePair = pairCands.length > 0 && (singleCands.length === 0 || Math.random() < PAIR_PROB);
-    if (!usePair && !singleCands.length) continue;
-
+    // --- 出題形式を決めて、正解とダミー候補を作る ---
     let promptTags = [];
     let targetIdxs = [];
-    let trapIdxs = []; // どちらか片方だけを持つ画像(人間には引っかけとして機能する。正解ではない)
+    let distractorPool = [];
+    let askN = 0;
 
-    if (usePair) {
+    if (mode === "and" || mode === "or") {
+      // 2タグ: AND=両方を持つ画像 / OR=どちらかを持つ画像が正解
+      const pairCands = [];
+      const tagList = [...byTag.entries()];
+      for (let a = 0; a < tagList.length; a++) {
+        for (let b = a + 1; b < tagList.length; b++) {
+          const [ta, va] = tagList[a];
+          const [tb, vb] = tagList[b];
+          // 片方が他方を含む組み合わせは避ける(例: ライフル / アサルトライフル)。
+          // 見た目で区別できず、片方だけの画像を引っかけにすると人間には不公平になる
+          if (ta.includes(tb) || tb.includes(ta)) continue;
+          // OCRノイズのような低品質タグを除外する(画像と対応していない)
+          if (va.usages < TAG_MIN_USAGES || vb.usages < TAG_MIN_USAGES) continue;
+          let both = 0;
+          for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
+          const union = new Set([...va.imgs, ...vb.imgs]).size;
+          if (mode === "and") {
+            if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+            if (both < 2 || both > (relaxed ? 4 : 3)) continue; // 両方を持つ画像が2〜3枚
+            if (!relaxed && union > 8) continue; // 広すぎる(ダミーが作れない)
+          } else {
+            // OR: 両方を持つ画像があると「どちらか」の答えが紛れるので避ける
+            if (both >= 1) continue;
+            if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+            if (union > 6) continue;
+          }
+          pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
+        }
+      }
+      if (!pairCands.length) { stats.fNoPair++; continue; }
       // 具体性の高い組み合わせを優先して抽選(両方を持つ画像が多い=主題らしい)
       const roulette = [];
       for (const c of pairCands) {
-        const w = Math.max(1, Math.round(c.both ** 2 * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
+        const w = Math.max(1, Math.round((c.both || 1) ** 2 * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
         for (let k = 0; k < w; k++) roulette.push(c);
       }
       const pick = roulette[Math.floor(Math.random() * roulette.length)];
       promptTags = [pick.a, pick.b];
       const setA = byTag.get(pick.a).imgs;
       const setB = byTag.get(pick.b).imgs;
-      for (const idx of setA) if (setB.has(idx)) targetIdxs.push(idx);
-      for (const idx of setA) if (!setB.has(idx)) trapIdxs.push(idx);
-      for (const idx of setB) if (!setA.has(idx)) trapIdxs.push(idx);
-    } else {
-      // 出現数の多いタグを強く優先(主題らしさの代理指標。誤付与を避ける)
-      const roulette = [];
-      for (const c of singleCands) {
-        const w = Math.max(1, Math.round(c.n ** 2 * concreteness(c.usages) * 10));
-        for (let k = 0; k < w; k++) roulette.push(c);
+      if (mode === "or") {
+        targetIdxs = [...new Set([...setA, ...setB])];
+      } else {
+        for (const idx of setA) if (setB.has(idx)) targetIdxs.push(idx);
       }
+      // ダミー: ANDは「片方だけ持つ画像」を優先的に引っかけにする。ORは「どちらも持たない画像」だけ
+      const tset = new Set(targetIdxs);
+      const trap = [];
+      const rest = [];
+      for (let idx = 0; idx < batch.length; idx++) {
+        if (tset.has(idx)) continue;
+        if (setA.has(idx) || setB.has(idx)) trap.push(idx);
+        else rest.push(idx);
+      }
+      distractorPool = [...shuffle(trap), ...shuffle(rest)];
+    } else {
+      // 単一タグ: {持つ|持たない} × {全部|N枚}
+      const wantsAbsent = mode === "not" || mode === "notpick";
+      // 出現回数(=同じバッチで何枚に付いているか)が多いタグほど「その画像の主題」である確率が高い。
+      // 実測: 出現2枚のタグは誤付与(例: 電車の画像に「バッグ」)が混ざり、正解が人間に見て分からない問題になった。
+      // 「◯枚だけ選べ」の枚数(1〜3枚)。タグが何枚に付いていても、グリッドに出す枚数で決める
+      const pickN = 1 + Math.floor(Math.random() * 3);
+      // グリッドに入れる正解の最大枚数(多すぎると選ぶのが大変になる)
+      const targetMax = relaxed ? 6 : 5;
+      const roulette = [];
+      for (const [tag, v] of byTag) {
+        const n = v.imgs.size;
+        if (v.usages < TAG_MIN_USAGES) continue; // OCRノイズのような低品質タグを除外する
+        let w = 0;
+        // ⚠️ 以前は「タグがちょうどN枚に付いている」ことを条件にしていたが、取得枚数を増やすと
+        //    候補が枯れる(実測: 空振りが増えた)。グリッドに出す枚数はこちらで選べるので、
+        //    「タグを持つ画像がN枚以上ある」ことだけを条件にする。
+        if (mode === "pick") {
+          if (n >= pickN) w = Math.max(1, Math.round(Math.min(n, pickN) ** 2 * concreteness(v.usages) * 10));
+        } else if (mode === "notpick") {
+          // 「◯枚だけ持たない」= グリッドのほとんどがそのタグで埋まる必要がある
+          if (n >= GRID_SIZE - 2) w = Math.max(1, Math.round(concreteness(v.usages) * 10));
+        } else if (wantsAbsent) {
+          // not: タグを持つ画像をダミー(1〜3枚)としてグリッドに入れる
+          if (n >= 1) w = Math.max(1, Math.round(concreteness(v.usages) * 10));
+        } else {
+          // single: 正解2枚以上(出現数の多いタグを優先=主題らしい)
+          if (n >= 2) w = Math.max(1, Math.round(Math.min(n, targetMax) ** 2 * concreteness(v.usages) * 10));
+        }
+        if (w > 0) for (let k = 0; k < w; k++) roulette.push({ tag, n, usages: v.usages });
+      }
+      if (!roulette.length) { stats.fNoTag++; continue; }
       const pick = roulette[Math.floor(Math.random() * roulette.length)];
       promptTags = [pick.tag];
-      targetIdxs = [...byTag.get(pick.tag).imgs];
+      const tagSet = byTag.get(pick.tag).imgs;
+      const absent = [];
+      for (let idx = 0; idx < batch.length; idx++) if (!tagSet.has(idx)) absent.push(idx);
+      if (wantsAbsent) {
+        // 正解 = タグを持たない画像(グリッド内で「持たない」のは正解だけ) / ダミー = タグを持つ画像
+        if (mode === "notpick") {
+          const N = Math.max(1, Math.min(2, GRID_SIZE - tagSet.size));
+          if (absent.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
+          targetIdxs = shuffle(absent).slice(0, N);
+          distractorPool = shuffle([...tagSet]).slice(0, GRID_SIZE - N);
+          askN = N;
+        } else {
+          const k = Math.max(1, Math.min(tagSet.size, 1 + Math.floor(Math.random() * 3)));
+          if (absent.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
+          targetIdxs = shuffle(absent).slice(0, GRID_SIZE - k);
+          distractorPool = shuffle([...tagSet]).slice(0, k);
+        }
+      } else {
+        // 正解 = タグを持つ画像から必要枚数だけグリッドに入れる / ダミー = タグを持たない画像
+        const want = mode === "pick" ? pickN : Math.min(targetMax, tagSet.size);
+        targetIdxs = shuffle([...tagSet]).slice(0, Math.min(want, tagSet.size));
+        distractorPool = shuffle(absent);
+        askN = mode === "pick" ? targetIdxs.length : 0;
+      }
     }
 
-    if (!targetIdxs.length) continue;
+
+    if (!targetIdxs.length) { stats.fNoTarget++; continue; }
 
     // --- 一貫性フィルタ: 正解候補から「浮いた1枚」を除く ---
     // AIタグ付けの誤付与(例: 商品の箱だけの画像に「カーディガン」)は、
@@ -795,7 +927,10 @@ async function makeChallenge() {
     //    ほぼ全画像に付くため、それを共通タグとして数えるとフィルタが機能しない。
     //    お題タグと同じ基準(questionableTag)を通る意味のあるタグだけを使う。
     const meaningful = (p) => [...p.tags].filter((t) => questionableTag(t, p.tagU.get(t) || 0));
-    if (targetIdxs.length >= 3) {
+    // ⚠️ not / notpick は正解が「タグを持たない画像」の寄せ集めで、共通タグを持つ前提が無い。
+    //    ここで正解を削ると、ダミー(タグを持つ画像)の枚数と辻褄が合わなくなり出題が壊れる
+    //    (実測: not で Pool:10 の空振りが出ていた)。
+    if (targetIdxs.length >= 3 && mode !== "not" && mode !== "notpick") {
       const sets = targetIdxs.map((idx) => new Set(meaningful(batch[idx]).filter((t) => !promptTags.includes(t))));
       const jac = (A, B) => {
         let inter = 0;
@@ -818,25 +953,23 @@ async function makeChallenge() {
 
     // 正解 = 条件を満たす画像 / ダミー = 条件を満たさない画像
     const targetSet = new Set(targetIdxs);
-    const trapSet = new Set(trapIdxs.filter((x) => !targetSet.has(x)));
     const needs = GRID_SIZE - targetSet.size;
-    if (needs < 1) continue;
-
-    // ダミー候補のプール(片方だけ持つ画像 + どちらも持たない画像)
-    const trapAll = [...trapSet];
-    const restAll = [];
-    for (let idx = 0; idx < batch.length; idx++) {
-      if (!targetSet.has(idx) && !trapSet.has(idx)) restAll.push(idx);
-    }
-    const poolAll = [...trapAll, ...restAll];
-    if (poolAll.length < needs) continue;
+    if (needs < 1) { stats.fNeeds++; continue; }
+    // ダミー候補(形式ごとに構成済み)から、正解と重複しないように必要枚数を取る
+    const pool = distractorPool.filter((idx) => !targetSet.has(idx));
+    if (pool.length < needs) { stats.fPool++; continue; }
 
     // --- 見分けやすさフィルタ(実測で導入) ---
     // ダミー画像が正解とタグを同程度共有していると、人間には見分けがつかない。
     // (実測: 「青いシャツ」で同じキャラの紺Tシャツが7枚あるのにタグは2枚だけ →
     //  visionは7枚を正解と判定し真実と食い違った。この比が1.02〜1.23だった)
     // 正解同士の平均類似度に対するダミーの類似度の比が高すぎる出題は捨てる。
-    if (targetIdxs.length >= 2 && poolAll.length >= needs) {
+    // ⚠️ not / notpick は正解が「タグを持たない画像」の寄せ集めで共通タグを持たず、
+    //    このフィルタの前提(正解同士が似ている)が成り立たないので適用しない。
+    if (
+      targetIdxs.length >= 2 && !relaxed &&
+      (mode === "single" || mode === "pick" || mode === "and" || mode === "or")
+    ) {
       const jac = (a, b) => {
         const A = new Set(a), B = new Set(b);
         let inter = 0;
@@ -852,24 +985,18 @@ async function makeChallenge() {
       }
       tt = ttN ? tt / ttN : 0;
       let dm = 0;
-      for (const idx of poolAll) {
+      for (const idx of pool) {
         const d = strip(batch[idx]);
         let m = 0;
         for (const t of tSets) m = Math.max(m, jac(d, t));
         dm += m;
       }
-      dm = dm / poolAll.length;
+      dm = dm / pool.length;
       const unfair = dm / Math.max(0.02, tt);
-      // 段階2(緩和レベル)では品質フィルタを外して可用性を優先する
-      if (!relaxed && unfair >= 0.85) { stats.tagRejects++; continue; } // 見分け不能な出題は捨てて次のバッチへ
+      if (unfair >= 0.85) { stats.tagRejects++; continue; } // 見分け不能な出題は捨てて次のバッチへ
     }
 
-    // ダミーは「片方だけ持つ画像(最大6割)」+「どちらも持たない画像」で構成
-    const trapTake = shuffle(trapAll).slice(0, Math.min(trapAll.length, Math.ceil(needs * 0.6)));
-    const rest = restAll.filter((idx) => !trapTake.includes(idx));
-    const need2 = needs - trapTake.length;
-    if (rest.length < need2) continue;
-    const distractorIdxs = [...trapTake, ...shuffle(rest).slice(0, need2)];
+    const distractorIdxs = pool.slice(0, needs);
 
     // --- 視覚フィルタ: 画像そのものが似すぎている出題を捨てる ---
     // タグの重なり(上のフィルタ)では捕まらない型の不公平をここで落とす。
@@ -916,12 +1043,15 @@ async function makeChallenge() {
     ]);
 
     stats.challenges++;
+    stats.modes[mode] = (stats.modes[mode] || 0) + 1;
     if (relaxed) stats.relaxedUsed++;
+    const ask = buildAsk(mode, promptTags, askN);
     return {
       id: cid,
-      prompt: promptTags.join(" × "), // 表示用(2タグなら「A × B」)
+      prompt: ask.text, // 表示用の文面(形式ごとに変わる)
+      ask, // 形式・タグ・選択枚数。クライアントはこれを見て表示する
       tags: promptTags, // 機械可読な出題タグ
-      mode: promptTags.length > 1 ? "and" : "single",
+      mode,
       createdAt: Date.now(),
       tiles,
       attempts: 0,
@@ -1096,6 +1226,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       id: c.id,
       prompt: c.prompt,
+      ask: c.ask, // 形式(mode)・タグ・選択枚数。クライアントはこれを見て文面と選択上限を決める
       tags: c.tags || [c.prompt],
       mode: c.mode || "single",
       tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),
@@ -1339,7 +1470,7 @@ server.listen(PORT, () => {
           console.error("[selftest] 出題を生成できませんでした(候補不足)");
           process.exit(2);
         }
-        console.log(`[selftest] OK: 「${c.prompt}」 mode=${c.mode} 正解${c.tiles.filter((t) => t.target).length}枚/9`);
+        console.log(`[selftest] OK: ${c.prompt} / mode=${c.mode} / 正解${c.tiles.filter((t) => t.target).length}枚/9`);
         process.exit(0);
       })
       .catch((err) => {

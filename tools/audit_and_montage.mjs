@@ -7,6 +7,8 @@ import path from "node:path";
 
 const DEBUG = process.argv[2] || "http://localhost:3108";
 const N = Number(process.argv[3] || 4);
+const PREFIX = process.argv[4] || "case"; // 形式ごとに出力名を分ける(例: not0.jpg)
+const EXPECT = process.argv[5] || null; // 期待する形式(違う形式が返ったら捨てる)
 const UA = { "user-agent": "Mozilla/5.0" };
 const OUTDIR = "C:/Users/maeba/Desktop/hikamani-captcha/tag_audit";
 mkdirSync(OUTDIR, { recursive: true });
@@ -32,10 +34,14 @@ async function main() {
   const results = [];
   for (let n = 0; n < N; n++) {
     let c = null;
-    for (let t = 0; t < 3 && !c; t++) {
+    for (let t = 0; t < 6 && !c; t++) {
       try {
         const r = await fetch(DEBUG + "/api/challenge", { headers: UA });
-        if (r.ok) c = await r.json();
+        if (r.ok) {
+          const j = await r.json();
+          // 期待する形式だけを採用する(古いサーバーの応答を拾わないため)
+          if (!EXPECT || j.mode === EXPECT) c = j;
+        }
       } catch {}
       if (!c) await new Promise((s) => setTimeout(s, 500));
     }
@@ -52,11 +58,11 @@ async function main() {
         files.push(p);
       } catch {}
     }
-    const out = path.join(OUTDIR, `case${n}.jpg`);
+    const out = path.join(OUTDIR, `${PREFIX}${n}.jpg`);
     try { await buildMontage(files, out); } catch (e) { console.log(`case${n}: montage失敗 ${e.message}`); }
     const truth = c.tiles.map((t, i) => `${POS[i]}=${t.target ? "正解" : "ダミー"}`).join(" ");
     results.push({ n, prompt: c.prompt, mode: c.mode, targets: c.tiles.filter((t) => t.target).length, out, truth, imagesOk: got });
-    console.log(`case${n}: 画像${got}/9 「${c.prompt}」 正解${c.tiles.filter((t) => t.target).length}枚`);
+    console.log(`case${n}: 画像${got}/9 [${c.mode}] ${c.prompt} (正解${c.tiles.filter((t) => t.target).length}枚)`);
     console.log(`   真実: ${truth}`);
     await new Promise((s) => setTimeout(s, 600));
   }
