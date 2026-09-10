@@ -27,11 +27,11 @@
       border-radius: 12px;
       padding: 14px;
       width: 100%;
-      max-width: 660px;
+      max-width: 720px;
       user-select: none;
     }
     .hkc-title { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #a1a1aa; }
-    .hkc-prompt { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: #d4d4d8; }
+    .hkc-prompt { margin: 0 0 10px; font-size: 15px; line-height: 1.5; color: #d4d4d8; }
     .hkc-prompt b { color: #7dd3fc; }
     .hkc-prompt .all { color: #fcd34d; }
     .hkc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
@@ -43,15 +43,15 @@
       overflow: hidden;
       background: #000;
       cursor: pointer;
-      aspect-ratio: 1;
+      /* 配信画像を3:2に揃えているので、タイルも3:2にして余白をなくす */
+      aspect-ratio: 3 / 2;
       display: block;
       transition: border-color .12s, opacity .12s;
     }
     .hkc-tile img {
       width: 100%; height: 100%;
-      /* 全体が見えるように contain。ただし余白が目立たないよう僅かに拡大する */
-      object-fit: contain;
-      transform: scale(1.04);
+      /* 配信側で3:2にクロップ済みなので cover でタイル全面を埋める */
+      object-fit: cover;
       display: block;
     }
     .hkc-tile:hover { border-color: #71717a; }
@@ -261,10 +261,20 @@
       box.textContent = "";
       box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
       if (ch && ch.prompt && !busy) {
+        const tags = Array.isArray(ch.tags) && ch.tags.length ? ch.tags : [ch.prompt];
         const p = el("p", "hkc-prompt");
         p.appendChild(document.createTextNode("下の画像の中から「"));
-        const b = el("b"); b.textContent = ch.prompt; p.appendChild(b);
-        p.appendChild(document.createTextNode("」の画像を"));
+        tags.forEach(function (t, i) {
+          if (i > 0) p.appendChild(document.createTextNode("」と「"));
+          const b = el("b"); b.textContent = t; p.appendChild(b);
+        });
+        p.appendChild(document.createTextNode("」"));
+        if (tags.length > 1) {
+          const both = el("b", "all"); both.textContent = "の両方"; p.appendChild(both);
+          p.appendChild(document.createTextNode("が写っている画像を"));
+        } else {
+          p.appendChild(document.createTextNode("の画像を"));
+        }
         const all = el("b", "all"); all.textContent = "全部"; p.appendChild(all);
         p.appendChild(document.createTextNode("選んでください"));
         box.appendChild(p);

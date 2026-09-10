@@ -310,6 +310,16 @@ const EXCLUDE_TAGS = new Set([
   // 5周目(実サーバー220サンプルの点検から)
   "ドウギ", "クリーン", "切亜未マリーサ", "フレント", "ニセキン", "内部", "弱点", "攻撃",
   "ヒカ", "ヒカクラン", "ヒカル", "下着", "公園", "バブル", "メリークリスマス", "敬礼",
+  // 8周目(2タグ出題の点検から)
+  "バラエティ", "ペルソナ", "開放服", "ブルーフーディー", "ヒカマーズアルカイダ", "ホモウンチ",
+  "無限", "オート再生", "ヒカギン", "着色眼鏡", "怪物", "消防マーク", "二重ペルソナ",
+  "商品券", "割引券", "領収書", "明細書", "申請書", "報告書", "議事録", "資料", "文書",
+  "バリエーション", "シチュエーション", "コミュニケーション", "コレクション",
+  // 9周目(単一+2タグの最終点検から)
+  "マイクロ", "vアームズ", "スウェットドロップ", "ヒューマノイド", "ポケモーフォルム",
+  "学生", "バーニング", "鈍い前髪", "日本語", "セカクラン", "カプコン", "触角", "前髪",
+  "ロングヘア", "ショートヘア", "ミディアムヘア", "髪型", "ヘアスタイル", "毛量",
+  "ポケモン", "ブルーアーカイブ", "ウマ娘", "東方", "アイドルマスター", "艦これ",
   // 6周目(240サンプルの点検から)
   "画像", "デジタルアート", "マインクラフト", "保存", "チャーリザード", "反応画像", "今日",
   "山田亮", "プライドカラー", "サイズ差", "デジタル", "イラスト", "運転", "友情コンボ",
@@ -332,6 +342,18 @@ function usableTag(t) {
   return !JUNK_TAG.some((re) => re.test(t));
 }
 
+// 辞書(UniDic)の品詞判定で機械的に洗い出した除外タグ。
+// tools/build_pos_reject.py が生成する(方式は変えず、除外の根拠を辞書で強化するだけ):
+//   形状詞(必要/シュール/コミカル)・サ変可能な名詞(キャンセル/退出/制作)・
+//   固有名詞の地名/人名(東京/仙台/浜口) = 画像を見て判別できない語
+let POS_REJECT = new Set();
+try {
+  const obj = JSON.parse(readFileSync(path.join(__dirname, "tag_reject.json"), "utf8"));
+  POS_REJECT = new Set(Object.keys(obj || {}));
+} catch {
+  console.warn("[warn] tag_reject.json が読めません(品詞による除外なしで続行)");
+}
+
 function questionableTag(t, usages) {
   if (!usableTag(t)) return false;
   const n = Number(usages) || 0;
@@ -343,6 +365,7 @@ function questionableTag(t, usages) {
   if (KATAKANA_PUNCT.test(t)) return false; // ・等(カタカナブロック内の約物)
   if (/\s/.test(t)) return false; // 空白入りはクエリ区切りと解釈される
   if (EXCLUDE_TAGS.has(t)) return false;
+  if (POS_REJECT.has(t)) return false; // 品詞判定で除外(動詞的/形容動詞的/地名/人名)
   if (NO_PARTICLE.test(t)) return false; // 「〜の〜」の説明文(手のジェスチャー等)
   if (ABSTRACT_WORD.test(t)) return false; // 抽象・状態・分類を表す語
   if (SUFFIX_ABSTRACT.test(t)) return false; // 抽象化・分類の語尾
@@ -367,15 +390,19 @@ function concreteness(usages) {
 
 // ---------- 出題生成 ----------
 
-// タイルは正方形なので、極端な縦長/横長(9:16未満・16:9超)は
-// 表示したときに小さく/切れて判別不能になる → 出題から除外
+// タイルは 3:2(横長)で表示する。実測で、正方形タイル+contain では横長画像(多数派)の
+// 上下40%が余白になり、被写体がタイル面積の46%しか使えなかった。
+// 1.5付近の画像だけを選べば、タイルを余白なしで埋められる(被写体が約1.8倍の面積になる)
 function goodAspect(p) {
   const w = Number(p.canvasWidth) || 0;
   const h = Number(p.canvasHeight) || 0;
   if (!w || !h) return false;
   const r = w / h;
-  return r >= 0.56 && r <= 1.78; // 9:16(0.5625)〜16:9(1.7778) の範囲
+  return r >= 1.35 && r <= 1.85; // 3:2を中心に±20%程度(タイルに余白なしで収まる範囲)
 }
+
+// 配信時の目標アスペクト比(タイルの 3:2 に合わせる)
+const TARGET_ASPECT = Number(process.env.TARGET_ASPECT || 1.5);
 
 // 画像プロキシ + 改変: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
 // 公開APIでタグを引いて正解を機械的に導出できてしまう。不透明IDに置き換えて中継する。
@@ -412,8 +439,11 @@ const execFileP = promisify(execFile);
 const TMP = mkdtempSync(path.join(tmpdir(), "hkc-img-"));
 let tmpSeq = 0;
 
-// 余白(構図変更)+微小クロップ+回転+微アスペクト変更+(時々)反転+再圧縮で
-// 「元画像と別物」のJPEGを作る。単一手法だと効かない画像がある(実測: 最小距離3)ため重ねる。
+// 改変: タイルの 3:2 に合わせて中央を(少しズラして)クロップし、
+// 反転・回転・ガンマ・再圧縮を重ねる。実測に基づく設計:
+//  - 余白(pad)は使わない → タイルを余白なしで埋められ、被写体が大きく見える
+//  - クロップは「構図をずらす」効果があり、pHashを動かしつつ被写体は拡大される
+//  - 反転は単独で距離が二桁動くが、反転を考慮する攻撃者には無効なので単独に頼らない
 async function transformImage(buf) {
   if (!TRANSFORM || !hasFfmpeg()) return null;
   const id = (tmpSeq = (tmpSeq + 1) % 100000);
@@ -421,36 +451,27 @@ async function transformImage(buf) {
   const out = path.join(TMP, `o${id}.jpg`);
   writeFileSync(inp, buf);
   const filters = [];
-  // 反転(内容は同じでpHashが大きく動く。実測で最も効率が良く、
-  // 単独でpHash距離が二桁動くので「改変が効かない画像」の下限を担保できる)
-  filters.push("hflip");
 
-  // 微小クロップ
-  const crop = Math.random() * CROP_PCT_MAX;
-  if (crop > 0.5) {
-    const keep = (100 - crop) / 100;
-    filters.push(`crop=iw*${keep.toFixed(3)}:ih*${keep.toFixed(3)}`);
-  }
+  // 1) 目標アスペクト(3:2)へクロップ。中心から少しズラして構図を変える
+  //    (ズラしは短辺の最大4%まで=被写体をほぼ削らない)
+  const shiftX = (Math.random() * 2 - 1) * 4; // %
+  const shiftY = (Math.random() * 2 - 1) * 4;
+  filters.push(
+    `crop='min(iw,ih*${TARGET_ASPECT})*(1-${Math.abs(shiftX) / 200})':'min(ih,iw/${TARGET_ASPECT})*(1-${Math.abs(shiftY) / 200})':` +
+    `'(iw-ow)*${(0.5 + shiftX / 200).toFixed(3)}':'(ih-oh)*${(0.5 + shiftY / 200).toFixed(3)}'`
+  );
 
-  // アスペクト比の微小変更(pHashのブロック境界を崩す)
-  const ax = 1 + (Math.random() * 2 - 1) * 0.06; // ±6%
-  const ay = 1 + (Math.random() * 2 - 1) * 0.06;
-  if (Math.abs(ax - 1) > 0.02 || Math.abs(ay - 1) > 0.02) {
-    filters.push(`scale=iw*${ax.toFixed(3)}:ih*${ay.toFixed(3)}`);
-  }
+  // 2) 反転(50%。反転を考慮する攻撃者には単独では効かないが、他の手法との併用で効く)
+  if (Math.random() < 0.5) filters.push("hflip");
 
-  // 余白(構図変更・被写体は削らない)
-  const pad = PAD_PCT_MIN + Math.random() * Math.max(0, PAD_PCT_MAX - PAD_PCT_MIN);
-  const dark = () => Math.floor(Math.random() * 90);
-  const bg = `0x${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}${dark().toString(16).padStart(2, "0")}`;
-  filters.push(`pad=iw+2*iw*${(pad / 100).toFixed(3)}:ih+2*ih*${(pad / 100).toFixed(3)}:iw*${(pad / 100).toFixed(3)}:ih*${(pad / 100).toFixed(3)}:${bg}`);
-
-  // 微小回転
+  // 3) 微小回転(内容は保ったままブロック境界を崩す)
   const rot = (Math.random() * 2 - 1) * ROT_DEG_MAX;
-  if (Math.abs(rot) > 0.2) filters.push(`rotate=${((rot * Math.PI) / 180).toFixed(6)}:fillcolor=${bg}`);
+  if (Math.abs(rot) > 0.2) {
+    filters.push(`rotate=${((rot * Math.PI) / 180).toFixed(6)}:fillcolor=black`);
+  }
 
-  // 明るさ・ガンマの微小変更(ピクセル統計も変える)
-  const gamma = 0.92 + Math.random() * 0.16;
+  // 4) 明るさ・ガンマ(ピクセル統計を変える)
+  const gamma = 0.93 + Math.random() * 0.14;
   filters.push(`eq=gamma=${gamma.toFixed(3)}`);
 
   try {
@@ -504,66 +525,129 @@ async function fetchRandomImageBatch(limit) {
     });
 }
 
+// 出題の形式:
+//  単一タグ … 「◯◯の画像を全部選べ」(正解=そのタグを持つ画像)
+//  2タグAND … 「◯◯と△△の両方が写っている画像を全部選べ」(正解=両方のタグを持つ画像)
+// 実測で「お題タグは1つに限らなくてよい」という方針に基づき、2タグの組み合わせも出題する。
+// これで出題のバリエーションが増え、ボット側は2つの対象を照合する必要があるため難度も上がる。
+const PAIR_PROB = Number(process.env.PAIR_PROB || 0.5); // 2タグ出題にする確率
+
 async function makeChallenge() {
-  for (let i = 0; i < 12; i++) {
-    const batch = await fetchRandomImageBatch(16);
+  for (let i = 0; i < 16; i++) {
+    const batch = await fetchRandomImageBatch(20);
     if (batch.length < GRID_SIZE) continue;
 
-    const counts = new Map(); // tag -> {n, usages}
-    for (const p of batch) {
+    // タグごとに「どの画像に付いているか」を保持(2タグの組み合わせ判定に使う)
+    const byTag = new Map(); // tag -> {usages, imgs:Set<index>}
+    for (let idx = 0; idx < batch.length; idx++) {
+      const p = batch[idx];
       for (const t of p.tags) {
         const usages = p.tagU.get(t) || 0;
         if (!questionableTag(t, usages)) continue;
-        const cur = counts.get(t);
-        if (cur) cur.n += 1;
-        else counts.set(t, { n: 1, usages });
+        const cur = byTag.get(t);
+        if (cur) cur.imgs.add(idx);
+        else byTag.set(t, { usages, imgs: new Set([idx]) });
       }
     }
-    const candidates = [];
-    for (const [tag, v] of counts) {
-      if (v.n >= 2 && v.n <= 4) candidates.push({ tag, n: v.n, usages: v.usages });
-    }
-    if (!candidates.length) continue;
 
-    // 重み付きランダム選択:
-    //   出現数(同じバッチで複数枚に付く=お題として成立する)×
-    //   具体性(使用回数が多い=ありふれた具体物)
-    // これで「テレビ/バッグ/スマホ」のような具体物が選ばれやすくなる
-    const roulette = [];
-    for (const c of candidates) {
-      const w = Math.max(1, Math.round(c.n * concreteness(c.usages) * 10));
-      for (let k = 0; k < w; k++) roulette.push(c.tag);
+    // --- 2タグANDの候補を作る ---
+    const pairCands = [];
+    const tagList = [...byTag.entries()];
+    for (let a = 0; a < tagList.length; a++) {
+      for (let b = a + 1; b < tagList.length; b++) {
+        const [ta, va] = tagList[a];
+        const [tb, vb] = tagList[b];
+        // 各タグが複数枚に付いていて、両方を持つ画像が1〜3枚ある組み合わせだけ
+        if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+        let both = 0;
+        for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
+        if (both < 1 || both > 3) continue;
+        const union = new Set([...va.imgs, ...vb.imgs]).size;
+        if (union > 8) continue; // 広すぎる(ダミーが作れない)
+        pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
+      }
     }
-    const tag = roulette[Math.floor(Math.random() * roulette.length)];
-    const tagCount = counts.get(tag)?.n || 2;
 
-    const targets = batch.filter((p) => p.tags.has(tag)).slice(0, tagCount);
-    const rest = batch.filter((p) => !p.tags.has(tag));
-    if (rest.length < GRID_SIZE - targets.length) continue;
-    const distractors = shuffle(rest).slice(0, GRID_SIZE - targets.length);
+    // --- 単一タグの候補 ---
+    const singleCands = [];
+    for (const [tag, v] of byTag) {
+      if (v.imgs.size >= 2 && v.imgs.size <= 4) singleCands.push({ tag, n: v.imgs.size, usages: v.usages });
+    }
+
+    const usePair = pairCands.length > 0 && (singleCands.length === 0 || Math.random() < PAIR_PROB);
+    if (!usePair && !singleCands.length) continue;
+
+    let promptTags = [];
+    let targetIdxs = [];
+    let trapIdxs = []; // どちらか片方だけを持つ画像(人間には引っかけとして機能する。正解ではない)
+
+    if (usePair) {
+      // 具体性の高い組み合わせを優先して抽選
+      const roulette = [];
+      for (const c of pairCands) {
+        const w = Math.max(1, Math.round(c.both * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
+        for (let k = 0; k < w; k++) roulette.push(c);
+      }
+      const pick = roulette[Math.floor(Math.random() * roulette.length)];
+      promptTags = [pick.a, pick.b];
+      const setA = byTag.get(pick.a).imgs;
+      const setB = byTag.get(pick.b).imgs;
+      for (const idx of setA) if (setB.has(idx)) targetIdxs.push(idx);
+      for (const idx of setA) if (!setB.has(idx)) trapIdxs.push(idx);
+      for (const idx of setB) if (!setA.has(idx)) trapIdxs.push(idx);
+    } else {
+      const roulette = [];
+      for (const c of singleCands) {
+        const w = Math.max(1, Math.round(c.n * concreteness(c.usages) * 10));
+        for (let k = 0; k < w; k++) roulette.push(c);
+      }
+      const pick = roulette[Math.floor(Math.random() * roulette.length)];
+      promptTags = [pick.tag];
+      targetIdxs = [...byTag.get(pick.tag).imgs];
+    }
+
+    if (!targetIdxs.length) continue;
+
+    // 正解 = 条件を満たす画像 / ダミー = 条件を満たさない画像
+    const targetSet = new Set(targetIdxs);
+    const trapSet = new Set(trapIdxs.filter((x) => !targetSet.has(x)));
+    const needs = GRID_SIZE - targetSet.size;
+    if (needs < 1) continue;
+
+    // ダミーは「片方だけ持つ画像(最大6割)」+「どちらも持たない画像」で構成
+    const trapTake = shuffle([...trapSet]).slice(0, Math.min(trapSet.size, Math.ceil(needs * 0.6)));
+    const rest = [];
+    for (let idx = 0; idx < batch.length; idx++) {
+      if (!targetSet.has(idx) && !trapTake.includes(idx)) rest.push(idx);
+    }
+    const need2 = needs - trapTake.length;
+    if (rest.length < need2) continue;
+    const distractorIdxs = [...trapTake, ...shuffle(rest).slice(0, need2)];
 
     const cid = randomBytes(8).toString("hex");
 
     const tiles = shuffle([
-      ...targets.map((p) => ({
+      ...[...targetSet].map((idx) => ({
         id: randomBytes(6).toString("hex"),
-        postId: p.id,
-        url: p.url,
-        imgId: registerImage(p.url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
+        postId: batch[idx].id,
+        url: batch[idx].url,
+        imgId: registerImage(batch[idx].url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
         target: true,
       })),
-      ...distractors.map((p) => ({
+      ...distractorIdxs.map((idx) => ({
         id: randomBytes(6).toString("hex"),
-        postId: p.id,
-        url: p.url,
-        imgId: registerImage(p.url, cid),
+        postId: batch[idx].id,
+        url: batch[idx].url,
+        imgId: registerImage(batch[idx].url, cid),
         target: false,
       })),
     ]);
 
     return {
       id: cid,
-      prompt: tag,
+      prompt: promptTags.join(" × "), // 表示用(2タグなら「A × B」)
+      tags: promptTags, // 機械可読な出題タグ
+      mode: promptTags.length > 1 ? "and" : "single",
       createdAt: Date.now(),
       tiles,
       attempts: 0,
@@ -723,6 +807,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       id: c.id,
       prompt: c.prompt,
+      tags: c.tags || [c.prompt],
+      mode: c.mode || "single",
       tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),
       ticket: c.ticket,
       // メモリハードPoW(scrypt)のパラメータ。クライアントは純JSで同じ計算をする
