@@ -20,7 +20,7 @@
 // 依存パッケージゼロ(Node 18+)。メモリ保持=単一プロセス前提。
 // hikabooru APIは公開なので、本気のボットには解ける(量産スクリプト抑止+コミュニティの遊び目的)。
 import http from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
@@ -42,9 +42,20 @@ const IP_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHALLENGES = 2000;
 const MAX_PER_IP = 10; // 同一IPで同時に保持する出題の上限(別タブ・同一NAT対策)
 
-const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip}
-const tokens = new Map(); // token -> {exp}
+// ---- 多層認証のパラメータ ----
+const POW_BITS = Number(process.env.POW_BITS || 14); // Proof-of-Work 難易度(先頭ゼロビット)
+const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 19); // 疑わしいIPへ引き上げる上限
+const MIN_SOLVE_MS = 1200; // 速すぎる回答は機械とみなす(画像を人間が選ぶには最低これくらい要る)
+const MIN_HUMAN_MS = 700; // PoW時間を差し引いた「人間の操作時間」の下限
+const HONEYPOT_FIELD = "website"; // ボットが埋めがちな隠しフィールド名
+const RISK_REJECT = 2; // リスク点がこれ以上なら拒否
+const TICKET_TTL_MS = 5 * 60 * 1000;
+
+const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip, pow, ticket, sid}
+const tokens = new Map(); // token -> {exp, ticket}
 const ipCounts = new Map(); // ip -> {n, resetAt}
+const ipSolved = new Map(); // ip -> 累計突破数(難易度の自動引き上げ用)
+const tickets = new Map(); // ticket -> {ip, exp}
 
 // ---------- hikabooru API ----------
 
@@ -74,6 +85,93 @@ function shuffle(arr) {
   }
   return a;
 }
+
+// ---------- 多層認証 ----------
+// 画像認証だけでは弱い(公開APIのタグで機械的に解ける)ため、以下を重ねる:
+//  1) 画像認証       … 何を選ぶか(内容理解)
+//  2) Proof-of-Work  … 回答前に計算コストを要求(量産の単価を上げる)
+//  3) ハニーポット   … 隠しフィールドを埋めたら即ボット
+//  4) 挙動シグナル   … ポインタ移動量・所要時間・操作の有無をスコア化
+//  5) チケット束縛   … 解決トークンを発行時のチケットに紐づけ(他人への転売を防ぐ)
+//  6) 適応難易度     … 突破実績の多いIPにはPoWを重くする
+
+// 先頭ゼロビット数を数える(sha256ダイジェストの難易度判定)
+function leadingZeroBits(buf) {
+  let zeros = 0;
+  for (const b of buf) {
+    if (b === 0) { zeros += 8; continue; }
+    zeros += Math.clz32(b) - 24;
+    break;
+  }
+  return zeros;
+}
+
+function powOk(challenge, nonce, bits) {
+  if (typeof challenge !== "string" || typeof nonce !== "string") return false;
+  if (nonce.length > 24 || challenge.length > 64) return false;
+  if (!/^\d+$/.test(nonce)) return false;
+  const h = createHash("sha256").update(challenge + ":" + nonce).digest();
+  return leadingZeroBits(h) >= bits;
+}
+
+// 突破実績の多いIPはPoWを重くする(自動化のコストを段階的に上げる)
+function powBitsFor(ip) {
+  const solved = ipSolved.get(ip) || 0;
+  const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / 5));
+  return POW_BITS + extra;
+}
+
+function newTicket(ip) {
+  const t = randomBytes(16).toString("hex");
+  tickets.set(t, { ip, exp: Date.now() + TICKET_TTL_MS });
+  return t;
+}
+
+function ticketOk(ticket, ip) {
+  if (typeof ticket !== "string" || !/^[0-9a-f]{32}$/.test(ticket)) return false;
+  const t = tickets.get(ticket);
+  if (!t) return false;
+  if (Date.now() > t.exp) { tickets.delete(ticket); return false; }
+  // 同一チケットの使い回しをIP不一致で弾く(他人のトークン流用を防ぐ)
+  if (t.ip !== ip) return false;
+  return true;
+}
+
+// 挙動シグナルを評価してリスク点を返す(0が人間らしい)
+// 誤検知を避ける方針: 「一切の操作が無い自動POST」を強く弾き、
+// 操作が観測できている場合はマウス固有の指標(移動量)で減点しない(タッチ操作の人間を救う)
+function riskScore(ch, signals, elapsedMs) {
+  let risk = 0;
+  const reasons = [];
+  const s = signals && typeof signals === "object" ? signals : {};
+
+  // 画像を読んで選ぶ時間が無い
+  if (elapsedMs < MIN_SOLVE_MS) { risk += 2; reasons.push("回答が速すぎる"); }
+  else {
+    const powMs = Number(s.powMs) || 0;
+    if (powMs > 0 && elapsedMs - powMs < MIN_HUMAN_MS) {
+      risk += 1;
+      reasons.push("操作時間が短すぎる");
+    }
+  }
+
+  // 操作が一切観測されていない = スクリプトからの直接POST
+  const interacted = s.interactionSeen === true || Number(s.pointerMoves) > 0 || Number(s.clicks) > 0;
+  if (!interacted) {
+    risk += 2;
+    reasons.push("操作が一切観測されていない");
+  } else if (s.touchSeen !== true && (Number(s.pointerMoves) || 0) < 3) {
+    // マウス操作なのに移動が少ない(タッチなら対象外)
+    risk += 1;
+    reasons.push("ポインタ移動が少なすぎる");
+  }
+
+  // 隠し要素への接触
+  if (s.touchedHidden === true) { risk += 2; reasons.push("隠し要素への接触"); }
+
+  return { risk, reasons };
+}
+
 
 // ---------- お題タグの選別 ----------
 // hikabooruのタグはメタ/文の断片/謎タグだらけ。
@@ -250,6 +348,7 @@ function sweep() {
   for (const [id, c] of challenges) if (now - c.createdAt > CHALLENGE_TTL_MS) challenges.delete(id);
   for (const [tk, t] of tokens) if (now > t.exp) tokens.delete(tk);
   for (const [imgId, img] of images) if (now > img.exp) images.delete(imgId);
+  for (const [t, v] of tickets) if (now > v.exp) tickets.delete(t);
   if (challenges.size > MAX_CHALLENGES) {
     const sorted = [...challenges.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
     for (const [id] of sorted.slice(0, sorted.length - MAX_CHALLENGES)) challenges.delete(id);
@@ -365,6 +464,10 @@ async function handleApi(req, res, url) {
       return sendJson(res, 502, { error: "問題を準備できませんでした。少し待ってからもう一度お試しください" });
     }
     c.ip = ip;
+    // PoW課題(この出題専用)とチケット(トークン束縛用)を発行
+    c.powBits = powBitsFor(ip);
+    c.pow = randomBytes(16).toString("hex");
+    c.ticket = newTicket(ip);
     challenges.set(c.id, c);
     // 画像URLは自前プロキシ経由の不透明URLで返す(元URL=投稿IDを渡さない)
     const base = publicBase(req);
@@ -372,10 +475,14 @@ async function handleApi(req, res, url) {
       id: c.id,
       prompt: c.prompt,
       tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),
+      ticket: c.ticket,
+      pow: { challenge: c.pow, bits: c.powBits, algo: "sha256" },
+      honeypot: HONEYPOT_FIELD,
+      minMs: MIN_SOLVE_MS,
     });
   }
 
-  // 回答検証(正解でワンタイム解決トークン発行)
+  // 回答検証(全層を通過した時だけワンタイム解決トークンを発行)
   if (url.pathname === "/api/verify" && req.method === "POST") {
     const ip = clientIp(req);
     if (!checkQuota(ip)) {
@@ -399,20 +506,66 @@ async function handleApi(req, res, url) {
       challenges.delete(id);
       return sendJson(res, 410, { ok: false, error: "不正なリクエストです", expired: true });
     }
+
+    // --- 層1: ハニーポット(隠しフィールドに値が入っていたら即ボット) ---
+    const hp = body && body[HONEYPOT_FIELD] != null ? String(body[HONEYPOT_FIELD]) : "";
+    if (hp.trim() !== "") {
+      challenges.delete(id);
+      return sendJson(res, 400, { ok: false, error: "自動入力を検出しました。最初からやり直してください", expired: true });
+    }
+
+    // --- 層2: チケット束縛(出題時に発行したチケットと一致するか) ---
+    if (!ticketOk(String(body?.ticket || ""), ip)) {
+      challenges.delete(id);
+      return sendJson(res, 410, { ok: false, error: "認証セッションが無効です。もう一度やり直してください", expired: true });
+    }
+
+    // --- 層3: Proof-of-Work(計算コスト) ---
+    if (!powOk(c.pow, String(body?.nonce ?? ""), c.powBits)) {
+      c.attempts += 1;
+      const remaining = MAX_ATTEMPTS - c.attempts;
+      if (remaining <= 0) {
+        challenges.delete(id);
+        return sendJson(res, 410, { ok: false, error: "認証に失敗しました。新しい問題に挑戦してください", expired: true });
+      }
+      return sendJson(res, 400, {
+        ok: false,
+        error: `計算認証(Proof-of-Work)が未完了です(あと${remaining}回)`,
+        remaining,
+        powRequired: true,
+      });
+    }
+
+    // --- 層4: 挙動シグナル(リスク点) ---
+    const elapsedMs = Number(body?.elapsedMs) || (Date.now() - c.createdAt);
+    const { risk, reasons } = riskScore(c, body?.signals, elapsedMs);
+    if (risk >= RISK_REJECT) {
+      challenges.delete(id);
+      return sendJson(res, 400, {
+        ok: false,
+        error: `機械的な操作を検出しました(${reasons.join("・")})。もう一度やり直してください`,
+        risk,
+        expired: true,
+      });
+    }
+
+    // --- 層5: 画像認証(本題) ---
     if (c.attempts >= MAX_ATTEMPTS) {
       challenges.delete(id);
       return sendJson(res, 410, { ok: false, error: "試行回数を超えました。新しい問題に挑戦してください", expired: true });
     }
-
     const expected = new Set(c.tiles.filter((t) => t.target).map((t) => t.id));
     const got = new Set(selected);
     const correct = expected.size === got.size && [...expected].every((x) => got.has(x));
 
     if (correct) {
       challenges.delete(id);
+      tickets.delete(String(body?.ticket || "")); // チケットは使い切り
       const token = randomBytes(24).toString("hex");
-      tokens.set(token, { exp: Date.now() + TOKEN_TTL_MS });
-      return sendJson(res, 200, { ok: true, token });
+      // トークンをチケットに束縛(他人のトークンを流用しても消費できない)
+      tokens.set(token, { exp: Date.now() + TOKEN_TTL_MS, ticket: String(body?.ticket || "") });
+      ipSolved.set(ip, (ipSolved.get(ip) || 0) + 1);
+      return sendJson(res, 200, { ok: true, token, risk });
     }
 
     c.attempts += 1;
@@ -424,16 +577,21 @@ async function handleApi(req, res, url) {
     return sendJson(res, 400, { ok: false, error: `違う画像が混ざっています(あと${remaining}回)。選び直してください`, remaining });
   }
 
-  // トークン消費(埋め込み先のサーバーが登録/投稿前に呼ぶ。ワンタイム)
+  // トークン消費(埋め込み先のサーバーが登録/投稿前に呼ぶ。ワンタイム+チケット一致必須)
   if (url.pathname === "/api/consume" && req.method === "POST") {
     const body = await readBody(req);
     const token = String(body?.token || "");
+    const ticket = String(body?.ticket || "");
     if (!token) return sendJson(res, 400, { ok: false, error: "トークンがありません" });
     sweep();
     const t = tokens.get(token);
     if (!t) return sendJson(res, 400, { ok: false, error: "トークンが無効です(期限切れ or 使用済み)" });
     tokens.delete(token); // 一度使ったら即無効
     if (Date.now() > t.exp) return sendJson(res, 400, { ok: false, error: "トークンの期限が切れています" });
+    // 発行時に束縛したチケットと一致しないトークンは拒否(転売・横流し対策)
+    if (!t.ticket || t.ticket !== ticket) {
+      return sendJson(res, 400, { ok: false, error: "トークンと認証セッションが一致しません" });
+    }
     return sendJson(res, 200, { ok: true });
   }
 
@@ -479,4 +637,13 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`ヒカマニCAPTCHA ready on http://localhost:${PORT} (hikabooru: ${HIKABOORU_BASE})`);
+  console.log(`  多層認証: 画像 + PoW(${POW_BITS}bit〜${POW_BITS_MAX}bit) + ハニーポット + 挙動判定 + チケット束縛`);
+});
+
+// 1件の失敗(画像取得のタイムアウト等)でCAPTCHAサービス全体を落とさない
+process.on("unhandledRejection", (err) => {
+  console.error("[unhandledRejection]", err && err.message ? err.message : err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err && err.message ? err.message : err);
 });
