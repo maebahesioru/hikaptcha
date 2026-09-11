@@ -21,7 +21,7 @@
 // hikabooru APIは公開なので、本気のボットには解ける(量産スクリプト抑止+コミュニティの遊び目的)。
 import http from "node:http";
 import { randomBytes, createHash, timingSafeEqual, scryptSync } from "node:crypto";
-import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, readdirSync, rmdirSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdtempSync, readdirSync, rmdirSync } from "node:fs";
 import { Readable } from "node:stream";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -402,6 +402,82 @@ function relatedTag(a, b) {
   return false;
 }
 
+// ---------- 直近に使ったお題タグの記憶(同じタグが続けて出るのを避ける) ----------
+// 実測: 40問で延べ45回・異なり31種 = 再出率31%(半袖×4 / アルコール×4 / 茶髪×3)。
+// バッチ内で多く付いているタグを優先する重みの副作用で、同じタグが何度も出ていた。
+// IPごとに直近のお題を覚えておき、同じタグとその類似タグ(リボン / ヘアリボン)を避ける。
+const RECENT_TAG_TTL_MS = Number(process.env.RECENT_TAG_TTL_MS || 15 * 60 * 1000);
+const RECENT_TAG_MAX = Number(process.env.RECENT_TAG_MAX || 200); // 1IPあたり覚えておくタグ数
+const recentTagsByIp = new Map(); // ip -> Map(tag -> 最終使用時刻)
+
+// 短いタグ用の緩い類似判定(直近タグを避ける時だけ使う)。
+// 「金髪 / 黒髪」「半袖 / 長袖」のように**末尾の漢字が同じ**ものは、同じ系統の質問に見える。
+// ⚠️ これを出題タグ同士の判定(relatedTag)に使うと誤検出するので、ここ専用にする。
+function similarForVariety(a, b) {
+  if (a === b) return true;
+  if (relatedTag(a, b)) return true;
+  if (a.length <= 4 && b.length <= 4) {
+    const ca = a[a.length - 1], cb = b[b.length - 1];
+    if (ca === cb && /[\u4e00-\u9faf]/.test(ca)) return true;
+  }
+  return false;
+}
+
+function recentTagsOf(ip) {
+  const now = Date.now();
+  const m = recentTagsByIp.get(ip);
+  if (!m) return [];
+  for (const [t, at] of m) if (now - at >= RECENT_TAG_TTL_MS) m.delete(t);
+  if (!m.size) { recentTagsByIp.delete(ip); return []; }
+  return [...m.keys()];
+}
+
+function rememberTags(ip, tags) {
+  let m = recentTagsByIp.get(ip);
+  if (!m) { m = new Map(); recentTagsByIp.set(ip, m); }
+  const now = Date.now();
+  for (const t of tags) m.set(t, now);
+  // 念のための上限(溢れたら古い順に捨てる)
+  if (m.size > RECENT_TAG_MAX) {
+    const oldest = [...m.entries()].sort((a, b) => a[1] - b[1]).slice(0, m.size - RECENT_TAG_MAX);
+    for (const [t] of oldest) m.delete(t);
+  }
+  if (recentTagsByIp.size > 2000) recentTagsByIp.clear();
+}
+
+function isRecentSimilar(tag, recent) {
+  for (const r of recent) if (similarForVariety(tag, r)) return true;
+  return false;
+}
+
+// そのタグを最後に使った時刻(未使用は0=最古扱い)
+function lastUsedAtOf(ip, tag) {
+  const m = recentTagsByIp.get(ip);
+  return (m && m.get(tag)) || 0;
+}
+
+// 候補が全部「直近と似ている」時の選び方。
+// ⚠️ 以前は重み付き抽選に戻していたため、最も人気のタグ(実測: 茶髪が9回)が繰り返し選ばれていた。
+//    最後に使ってから一番古い候補を優先する(使ったばかりのタグは最後に回る)。
+function pickLeastRecent(cands, ip) {
+  // ⚠️ ここは [キー, 候補] の配列を返す必要がある。カンマ式にすると Map のエントリにならず、
+  //    戻り値が undefined になって「Cannot read properties of undefined」で500になった(実測)
+  const uniq = [...new Map(cands.map((c) => [c.tag || c.a + "\u0000" + c.b, c])).values()];
+  uniq.sort((x, y) => {
+    const tx = Math.max(lastUsedAtOf(ip, x.tag || x.a), lastUsedAtOf(ip, x.tag || x.b));
+    const ty = Math.max(lastUsedAtOf(ip, y.tag || y.a), lastUsedAtOf(ip, y.tag || y.b));
+    return tx - ty;
+  });
+  // ⚠️ 「古い方から5件をランダム」だと、候補が少ないバッチで同じタグ(茶髪×8)が繰り返し当たった。
+  //    一番古い候補を選ぶ(同着はランダム)。結果的に候補を順番に使い回す動きになる。
+  const oldest = uniq[0];
+  const ties = uniq.filter((c) => {
+    const t = (x) => Math.max(lastUsedAtOf(ip, x.tag || x.a), lastUsedAtOf(ip, x.tag || x.b));
+    return t(c) === t(oldest);
+  });
+  return ties[Math.floor(Math.random() * ties.length)];
+}
+
 // ---------- 共起タグによる「その画像にTが写っていそうか」の推定 ----------
 // AIタガーは個々の画像で誤る(誤付与・誤漏れ)。タグそのものは信用できないが、
 // 「Tが付いた画像群に共通して現れる珍しいタグ(=Tらしい文脈)」はサイト全体の統計として使える。
@@ -533,7 +609,7 @@ const prefetched = new Map();
 const stats = {
   challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [], modes: {},
   // 出題生成の失敗理由(チューニング用。attempts=試行回数の合計)
-  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0, relatedExcluded: 0, relatedPromoted: 0, compChecked: 0, compDropped: 0, compRanked: 0, compSkipped: 0,
+  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0, relatedExcluded: 0, relatedPromoted: 0, compChecked: 0, compDropped: 0, compRanked: 0, compSkipped: 0, fRecentEmpty: 0, recentDown: 0,
 };
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
@@ -1008,7 +1084,7 @@ async function withMakeSlot(fn) {
   }
 }
 
-async function makeChallenge() {
+async function makeChallenge(ip = "") {
   // フィルタを段階的に緩める(厳しいフィルタで出題できない場合に品質より可用性を優先)。
   // 段階0=厳しい(スクショ除外+タグ数制限) / 1=スクショ除外のみ / 2=制限なし+候補条件も緩和
   const LEVELS = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2];
@@ -1024,10 +1100,10 @@ async function makeChallenge() {
     // 実測: フィルタ通過率が低く、30枚取っても9枚に足りないことが多い(空振りの53%)。
     // 足りないときは1回だけ取得枚数を倍にして取り直す(level 0〜1の再利用で往復を減らす)。
     if (batch.length < GRID_SIZE) {
-      stats.fShortBatch++;
+      stats.fShortBatch++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fShortBatch" + " mode=" + mode + "\n");
       batch = await fetchRandomImageBatch(Math.max(100, firstLimit * 2), level);
       stats.attempts++;
-      if (batch.length < GRID_SIZE) { stats.fShortBatch++; continue; }
+      if (batch.length < GRID_SIZE) { stats.fShortBatch++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fShortBatch" + " mode=" + mode + "\n"); continue; }
     }
     // 投稿者(元ネタ)の識別: 同じ人の連投が並ぶのを避ける選択に使う
     const srcOf = (idx) => batch[idx] && batch[idx].src;
@@ -1080,14 +1156,22 @@ async function makeChallenge() {
           pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
         }
       }
-      if (!pairCands.length) { stats.fNoPair++; continue; }
+      if (!pairCands.length) { stats.fNoPair++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoPair" + " mode=" + mode + "\n"); continue; }
       // 具体性の高い組み合わせを優先して抽選(両方を持つ画像が多い=主題らしい)
-      const roulette = [];
-      for (const c of pairCands) {
-        const w = Math.max(1, Math.round((c.both || 1) ** 2 * Math.sqrt(concreteness(c.ua) * concreteness(c.ub)) * 10));
-        for (let k = 0; k < w; k++) roulette.push(c);
+      const recentPair = recentTagsOf(ip);
+      const pairPickable = pairCands.filter((c) => !isRecentSimilar(c.a, recentPair) && !isRecentSimilar(c.b, recentPair));
+      let pick;
+      if (pairPickable.length) {
+        const roulette = [];
+        for (const c of pairPickable) {
+          const w = Math.max(1, Math.round((c.both || 1) ** 1.5 * Math.sqrt(Math.sqrt(concreteness(c.ua) * concreteness(c.ub))) * 10));
+          for (let k = 0; k < w; k++) roulette.push(c);
+        }
+        pick = roulette[Math.floor(Math.random() * roulette.length)];
+      } else {
+        pick = pickLeastRecent(pairCands, ip) || pairCands[0];
+        stats.fRecentEmpty = (stats.fRecentEmpty || 0) + 1;
       }
-      const pick = roulette[Math.floor(Math.random() * roulette.length)];
       promptTags = [pick.a, pick.b];
       const setA = byTag.get(pick.a).imgs;
       const setB = byTag.get(pick.b).imgs;
@@ -1121,6 +1205,7 @@ async function makeChallenge() {
       // グリッドに入れる正解の最大枚数(多すぎると選ぶのが大変になる)
       const targetMax = relaxed ? 6 : 5;
       const roulette = [];
+      const recentTags = recentTagsOf(ip);
       for (const [tag, v] of byTag) {
         const n = v.imgs.size;
         if (v.usages < TAG_MIN_USAGES) continue; // OCRノイズのような低品質タグを除外する
@@ -1128,8 +1213,13 @@ async function makeChallenge() {
         // ⚠️ 以前は「タグがちょうどN枚に付いている」ことを条件にしていたが、取得枚数を増やすと
         //    候補が枯れる(実測: 空振りが増えた)。グリッドに出す枚数はこちらで選べるので、
         //    「タグを持つ画像がN枚以上ある」ことだけを条件にする。
+        // ⚠️ 以前は n² × concreteness(usages) で重み付けしていたが、これだと
+        //    「バッチに5枚あって使用回数も多いタグ」が他より24倍有利になり、
+        //    礼服×10 / 茶髪×8 のように同じタグばかり出ていた(実測: 120問で再出率40%)。
+        //    平方根スケールに平坦化して、珍しいが有効なタグにも十分な確率を渡す。
+        const flatW = (nn) => Math.min(nn, targetMax) ** 1.5 * Math.sqrt(concreteness(v.usages)) * 10;
         if (mode === "pick") {
-          if (n >= pickN) w = Math.max(1, Math.round(Math.min(n, pickN) ** 2 * concreteness(v.usages) * 10));
+          if (n >= pickN) w = Math.max(1, Math.round(flatW(Math.min(n, pickN))));
         } else if (mode === "notpick") {
           // 「◯枚だけ持たない」= グリッドのほとんどがそのタグで埋まる必要がある
           if (n >= GRID_SIZE - 2) w = Math.max(1, Math.round(concreteness(v.usages) * 10));
@@ -1138,12 +1228,24 @@ async function makeChallenge() {
           if (n >= 1) w = Math.max(1, Math.round(concreteness(v.usages) * 10));
         } else {
           // single: 正解2枚以上(出現数の多いタグを優先=主題らしい)
-          if (n >= 2) w = Math.max(1, Math.round(Math.min(n, targetMax) ** 2 * concreteness(v.usages) * 10));
+          if (n >= 2) w = Math.max(1, Math.round(flatW(n)));
         }
+        // 直近で出したタグ(とその類似タグ)は重みを1/20に落とす。
+        // ⚠️ 除外にすると候補が尽きて「記憶を無視して再出」が27%起きたので、必ず候補には残す
         if (w > 0) for (let k = 0; k < w; k++) roulette.push({ tag, n, usages: v.usages });
+        if (w > 0) stats.wSum = (stats.wSum || 0) + w;
       }
-      if (!roulette.length) { stats.fNoTag++; continue; }
-      const pick = roulette[Math.floor(Math.random() * roulette.length)];
+      if (!roulette.length) { stats.fNoTag++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTag" + " mode=" + mode + "\n"); continue; }
+      // 直近に出したタグ(とその類似タグ)は避ける。避けた結果ゼロなら全体から選ぶ
+      // ⚠️ 重みを下げる方式では人気タグが結局勝っていた(実測: 礼服×10)ので、除外に切り替える
+      let pick = null;
+      const pool = roulette.filter((r) => !isRecentSimilar(r.tag, recentTags));
+      if (pool.length) {
+        pick = pool[Math.floor(Math.random() * pool.length)];
+      } else {
+        pick = pickLeastRecent(roulette, ip) || roulette[0];
+        stats.fRecentEmpty = (stats.fRecentEmpty || 0) + 1;
+      }
       promptTags = [pick.tag];
       const tagSet = byTag.get(pick.tag).imgs;
       const absent = [];
@@ -1195,13 +1297,13 @@ async function makeChallenge() {
         const decoyPool = [...tagSet];
         if (mode === "notpick") {
           const N = Math.max(1, Math.min(2, GRID_SIZE - tagSet.size));
-          if (usable.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
+          if (usable.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNotpickShape" + " mode=" + mode + "\n"); continue; }
           targetIdxs = pickBySrcDiversity(preferByScore(usable, N, false), N, srcOf);
           distractorPool = shuffle(preferByScore(decoyPool, GRID_SIZE - N, true)).slice(0, GRID_SIZE - N);
           askN = N;
         } else {
           const k = Math.max(1, Math.min(tagSet.size, 1 + Math.floor(Math.random() * 3)));
-          if (usable.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
+          if (usable.length < GRID_SIZE - k) { stats.fNotShape++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNotShape" + " mode=" + mode + "\n"); continue; }
           targetIdxs = pickBySrcDiversity(preferByScore(usable, GRID_SIZE - k, false), GRID_SIZE - k, srcOf);
           distractorPool = shuffle(preferByScore(decoyPool, k, true)).slice(0, k);
         }
@@ -1237,7 +1339,8 @@ async function makeChallenge() {
     }
 
 
-    if (!targetIdxs.length) { stats.fNoTarget++; continue; }
+    if (!targetIdxs.length) { stats.fNoTarget++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTarget" + " mode=" + mode + "\n"); continue; }
+    rememberTags(ip, promptTags);
 
     // --- 一貫性フィルタ: 正解候補から「浮いた1枚」を除く ---
     // AIタグ付けの誤付与(例: 商品の箱だけの画像に「カーディガン」)は、
@@ -1273,10 +1376,10 @@ async function makeChallenge() {
     // 正解 = 条件を満たす画像 / ダミー = 条件を満たさない画像
     const targetSet = new Set(targetIdxs);
     const needs = GRID_SIZE - targetSet.size;
-    if (needs < 1) { stats.fNeeds++; continue; }
+    if (needs < 1) { stats.fNeeds++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNeeds" + " mode=" + mode + "\n"); continue; }
     // ダミー候補(形式ごとに構成済み)から、正解と重複しないように必要枚数を取る
     const pool = distractorPool.filter((idx) => !targetSet.has(idx));
-    if (pool.length < needs) { stats.fPool++; continue; }
+    if (pool.length < needs) { stats.fPool++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fPool" + " mode=" + mode + "\n"); continue; }
 
     // --- 見分けやすさフィルタ(実測で導入) ---
     // ダミー画像が正解とタグを同程度共有していると、人間には見分けがつかない。
@@ -1328,7 +1431,7 @@ async function makeChallenge() {
       const rest = pool.filter((idx) => !distractorIdxs.includes(idx));
       distractorIdxs = distractorIdxs.concat(pickBySrcDiversity(rest, needs - distractorIdxs.length, srcOf));
     }
-    if (distractorIdxs.length < needs) { stats.fPool++; continue; }
+    if (distractorIdxs.length < needs) { stats.fPool++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fPool" + " mode=" + mode + "\n"); continue; }
 
     // --- 視覚フィルタ: 画像そのものが似すぎている出題を捨てる ---
     // タグの重なり(上のフィルタ)では捕まらない型の不公平をここで落とす。
@@ -1601,7 +1704,7 @@ async function handleApi(req, res, url) {
       challenges.delete(old.id);
     }
     // 順番待ちは無制限なので、混雑時は「遅くなる」だけで拒否しない
-    const c = await withMakeSlot(() => makeChallenge());
+    const c = await withMakeSlot(() => makeChallenge(ip));
     if (!c) {
       return sendJson(res, 502, { error: "問題を準備できませんでした。少し待ってからもう一度お試しください" });
     }
@@ -1847,6 +1950,9 @@ const server = http.createServer(async (req, res) => {
     // ログに出し、APIには500を返す(静的ファイルのみ404)。
     const isApi = url.pathname.startsWith("/api/");
     console.error("[request error]", url.pathname, err && err.stack ? err.stack.split("\n")[0] : err);
+    if (process.env.DEBUG_MAKE === "1") {
+      try { appendFileSync("make-fail.log", "[error] " + url.pathname + " " + (err && err.stack ? err.stack : String(err)) + "\n"); } catch {}
+    }
     if (!res.headersSent) {
       if (isApi) {
         res.writeHead(500, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*" });
