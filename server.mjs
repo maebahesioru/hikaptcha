@@ -382,6 +382,26 @@ try {
   console.warn("[warn] tag_reject.json が読めません(品詞による除外なしで続行)");
 }
 
+// お題タグ T と「別物だが関連する」タグの判定。
+// AIタガーは同じ概念を別タグで付けることがある(シャツ / 灰色のシャツ / ワイシャツ)。
+// そういう画像は「Tが写っているか?」が人間には判断できない(選ぶと不正解になる)ので、
+// 出題から外す。辞書を使わない構造的な判定(文字列の包含 / 3文字以上の連続一致)。
+// ⚠️ 2文字一致まで許すと「ローブ vs テーブル」「ジャケット vs ヘルメット」を誤検出する(実測)。
+function relatedTag(a, b) {
+  if (!a || !b || a === b) return false;
+  if (a.includes(b) || b.includes(a)) return true; // シャツ ⊂ 灰色のシャツ / ギター ⊂ エレクトリックギター
+  const jp = /[\u30a0-\u30ff\u4e00-\u9faf]/;
+  const min = Math.min(a.length, b.length);
+  for (let len = min; len >= 3; len--) { // 3文字以上(2文字は偶然一致が多い)
+    for (let i = 0; i + len <= a.length; i++) {
+      const sub = a.slice(i, i + len);
+      if (!jp.test(sub)) continue;
+      if (b.includes(sub)) return true;
+    }
+  }
+  return false;
+}
+
 function questionableTag(t, usages) {
   if (!usableTag(t)) return false;
   const n = Number(usages) || 0;
@@ -443,7 +463,7 @@ const prefetched = new Map();
 const stats = {
   challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [], modes: {},
   // 出題生成の失敗理由(チューニング用。attempts=試行回数の合計)
-  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0,
+  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0, relatedExcluded: 0, relatedPromoted: 0,
 };
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
@@ -1007,11 +1027,16 @@ async function makeChallenge() {
         for (const idx of setA) if (setB.has(idx)) targetIdxs.push(idx);
       }
       // ダミー: ANDは「片方だけ持つ画像」を優先的に引っかけにする。ORは「どちらも持たない画像」だけ
+      // お題タグと関連する別タグを持つ画像は、人間には「写っている」と見えるので除外する
+      const relPair = new Set();
+      for (const t of promptTags) for (const [tag] of byTag) if (relatedTag(t, tag)) relPair.add(tag);
+      const ambPair = (idx) => [...batch[idx].tags].some((t) => relPair.has(t) && !promptTags.includes(t));
       const tset = new Set(targetIdxs);
       const trap = [];
       const rest = [];
       for (let idx = 0; idx < batch.length; idx++) {
         if (tset.has(idx)) continue;
+        if (relPair.size && ambPair(idx)) { stats.relatedExcluded++; continue; }
         if (setA.has(idx) || setB.has(idx)) trap.push(idx);
         else rest.push(idx);
       }
@@ -1053,25 +1078,42 @@ async function makeChallenge() {
       const tagSet = byTag.get(pick.tag).imgs;
       const absent = [];
       for (let idx = 0; idx < batch.length; idx++) if (!tagSet.has(idx)) absent.push(idx);
+      // --- 関連タグによる曖昧さの排除 ---
+      // AIタガーは同じ概念を別タグで付ける(シャツ / 灰色のシャツ / ワイシャツ)。
+      // そういう画像は「Tが写っているか」を人間が判断できない(選べば不正解)ので、
+      // 正解にもダミーにも使わない。実測で36%の出題に該当していた=誤漏れの主要因。
+      const related = new Set();
+      for (const [tag] of byTag) if (relatedTag(pick.tag, tag)) related.add(tag);
+      const isAmbiguous = (idx) => [...batch[idx].tags].some((t) => related.has(t));
+      const absentSafe = related.size ? absent.filter((idx) => !isAmbiguous(idx)) : absent;
+      if (absentSafe.length < absent.length) stats.relatedExcluded += absent.length - absentSafe.length;
+      const usable = absentSafe;
       if (wantsAbsent) {
         // 正解 = タグを持たない画像(グリッド内で「持たない」のは正解だけ) / ダミー = タグを持つ画像
         if (mode === "notpick") {
           const N = Math.max(1, Math.min(2, GRID_SIZE - tagSet.size));
-          if (absent.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
-          targetIdxs = pickBySrcDiversity(absent, N, srcOf);
+          if (usable.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
+          targetIdxs = pickBySrcDiversity(usable, N, srcOf);
           distractorPool = shuffle([...tagSet]).slice(0, GRID_SIZE - N);
           askN = N;
         } else {
           const k = Math.max(1, Math.min(tagSet.size, 1 + Math.floor(Math.random() * 3)));
-          if (absent.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
-          targetIdxs = pickBySrcDiversity(absent, GRID_SIZE - k, srcOf);
+          if (usable.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
+          targetIdxs = pickBySrcDiversity(usable, GRID_SIZE - k, srcOf);
           distractorPool = shuffle([...tagSet]).slice(0, k);
         }
       } else {
-        // 正解 = タグを持つ画像から必要枚数だけグリッドに入れる / ダミー = タグを持たない画像
-        const want = mode === "pick" ? pickN : Math.min(targetMax, tagSet.size);
-        targetIdxs = pickBySrcDiversity([...tagSet], Math.min(want, tagSet.size), srcOf);
-        distractorPool = shuffle(absent);
+        // 正解 = タグを持つ画像 + 関連タグを持つ画像から必要枚数だけグリッドに入れる
+        // ⚠️ 関連タグ持ち(例: お題「シャツ」に対し「灰色のシャツ」が付いた画像)は、
+        //    人間には「シャツが写っている」と見えるので**正解側に入れる**のが正しい。
+        //    ダミー側に置くと「選べば不正解」になり、これが誤漏れによる不公平の主因だった。
+        //    除外だけでは「正解が減る」だけで、人間が見て選ぶ画像が答えから漏れたままになる。
+        const relatedImgs = absent.filter((idx) => related.size && isAmbiguous(idx));
+        if (relatedImgs.length) stats.relatedPromoted = (stats.relatedPromoted || 0) + relatedImgs.length;
+        const targetPool = [...tagSet, ...relatedImgs];
+        const want = mode === "pick" ? pickN : Math.min(targetMax, targetPool.length);
+        targetIdxs = pickBySrcDiversity(targetPool, Math.min(want, targetPool.length), srcOf);
+        distractorPool = shuffle(usable); // 関連タグ持ちはダミーに使わない
         askN = mode === "pick" ? targetIdxs.length : 0;
       }
     }

@@ -17,6 +17,9 @@ os.makedirs(os.path.join(DST, "public"))
 shutil.copy(os.path.join(ROOT, "server.mjs"), DST)
 # 品詞判定の除外リストも一緒にコピー(サーバーが起動時に読む)
 shutil.copy(os.path.join(ROOT, "tag_reject.json"), DST)
+# server.mjs が import する lib/ も必要(/docs のレンダラ)。
+# 忘れると ERR_MODULE_NOT_FOUND でデバッグコピーが起動しない(実測で踏んだ)。
+shutil.copytree(os.path.join(ROOT, "lib"), os.path.join(DST, "lib"))
 for name in os.listdir(os.path.join(ROOT, "public")):
     shutil.copy(os.path.join(ROOT, "public", name), os.path.join(DST, "public", name))
 

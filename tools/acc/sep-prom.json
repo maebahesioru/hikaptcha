@@ -1,0 +1,134 @@
+[
+ {
+  "n": 0,
+  "prompt": "「お寿司」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 8,
+  "inter": 28.7,
+  "sep": 3.59,
+  "nearest": 27.4,
+  "minDT": 17
+ },
+ {
+  "n": 1,
+  "prompt": "「ヘルメット」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 4,
+  "intra": 17.3,
+  "inter": 30.6,
+  "sep": 1.77,
+  "nearest": 25.2,
+  "minDT": 17
+ },
+ {
+  "n": 2,
+  "prompt": "「茶髪」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 21,
+  "inter": 32.5,
+  "sep": 1.55,
+  "nearest": 30.7,
+  "minDT": 17
+ },
+ {
+  "n": 3,
+  "prompt": "「セーター」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 27,
+  "inter": 33.8,
+  "sep": 1.25,
+  "nearest": 29.3,
+  "minDT": 25
+ },
+ {
+  "n": 4,
+  "prompt": "「フォーク」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 28.5,
+  "sep": 28.5,
+  "nearest": 28.5,
+  "minDT": 22
+ },
+ {
+  "n": 5,
+  "prompt": "「ボディスーツ」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 3,
+  "intra": 32,
+  "inter": 31.7,
+  "sep": 0.99,
+  "nearest": 26.3,
+  "minDT": 22
+ },
+ {
+  "n": 6,
+  "prompt": "「タオル」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 32,
+  "inter": 28.6,
+  "sep": 0.89,
+  "nearest": 25,
+  "minDT": 19
+ },
+ {
+  "n": 7,
+  "prompt": "「ヘルメット」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 27,
+  "inter": 31.1,
+  "sep": 1.15,
+  "nearest": 23.4,
+  "minDT": 12
+ },
+ {
+  "n": 8,
+  "prompt": "「地平線」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 32.4,
+  "inter": 34.9,
+  "sep": 1.08,
+  "nearest": 24,
+  "minDT": 24
+ },
+ {
+  "n": 9,
+  "prompt": "「アルコール」または「黒い帽子」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 2,
+  "intra": 25,
+  "inter": 27.9,
+  "sep": 1.12,
+  "nearest": 26.3,
+  "minDT": 22
+ },
+ {
+  "n": 10,
+  "prompt": "「アルコール」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 29.7,
+  "inter": 31.8,
+  "sep": 1.07,
+  "nearest": 25,
+  "minDT": 25
+ },
+ {
+  "n": 11,
+  "prompt": "「茶髪」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 5,
+  "intra": 21.4,
+  "inter": 33.5,
+  "sep": 1.57,
+  "nearest": 27,
+  "minDT": 23
+ }
+]

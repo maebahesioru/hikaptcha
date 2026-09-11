@@ -1,0 +1,68 @@
+[
+ {
+  "n": 0,
+  "prompt": "「スプーン」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 30.2,
+  "inter": 31.1,
+  "sep": 1.03,
+  "nearest": 23,
+  "minDT": 23
+ },
+ {
+  "n": 1,
+  "prompt": "「カメラ」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 25,
+  "inter": 34.6,
+  "sep": 1.39,
+  "nearest": 32.1,
+  "minDT": 19
+ },
+ {
+  "n": 2,
+  "prompt": "「シャツ」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 29,
+  "inter": 31.8,
+  "sep": 1.1,
+  "nearest": 29.3,
+  "minDT": 17
+ },
+ {
+  "n": 3,
+  "prompt": "「半袖」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.5,
+  "inter": 33.4,
+  "sep": 1.06,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 4,
+  "prompt": "「茶髪」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 5,
+  "intra": 21.6,
+  "inter": 32.3,
+  "sep": 1.5,
+  "nearest": 27.8,
+  "minDT": 22
+ },
+ {
+  "n": 5,
+  "prompt": "「タオル」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 33,
+  "inter": 32.1,
+  "sep": 0.97,
+  "nearest": 27,
+  "minDT": 17
+ }
+]

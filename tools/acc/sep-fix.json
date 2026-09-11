@@ -1,0 +1,134 @@
+[
+ {
+  "n": 0,
+  "prompt": "「赤いジャケット」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 31,
+  "inter": 33.5,
+  "sep": 1.08,
+  "nearest": 30.7,
+  "minDT": 25
+ },
+ {
+  "n": 1,
+  "prompt": "「ビーニー」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.3,
+  "inter": 33.9,
+  "sep": 1.08,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 2,
+  "prompt": "「ヒゲ」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 17,
+  "inter": 30.5,
+  "sep": 1.79,
+  "nearest": 29.3,
+  "minDT": 12
+ },
+ {
+  "n": 3,
+  "prompt": "「モグラ」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 35,
+  "sep": 35,
+  "nearest": 35,
+  "minDT": 27
+ },
+ {
+  "n": 4,
+  "prompt": "「テレビ」または「ノートパソコン」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 4,
+  "intra": 29.2,
+  "inter": 31.9,
+  "sep": 1.09,
+  "nearest": 24.8,
+  "minDT": 16
+ },
+ {
+  "n": 5,
+  "prompt": "「傷跡」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 30,
+  "inter": 30.6,
+  "sep": 1.02,
+  "nearest": 25.3,
+  "minDT": 15
+ },
+ {
+  "n": 6,
+  "prompt": "「ブレイザー」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.8,
+  "inter": 30.9,
+  "sep": 0.97,
+  "nearest": 25,
+  "minDT": 25
+ },
+ {
+  "n": 7,
+  "prompt": "「ヘッドセット」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 30.2,
+  "inter": 33.3,
+  "sep": 1.1,
+  "nearest": 28,
+  "minDT": 28
+ },
+ {
+  "n": 8,
+  "prompt": "「ヘルメット」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.3,
+  "inter": 33.8,
+  "sep": 1.08,
+  "nearest": 29,
+  "minDT": 29
+ },
+ {
+  "n": 9,
+  "prompt": "「眼鏡」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.6,
+  "inter": 31,
+  "sep": 0.98,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 10,
+  "prompt": "「上着」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 26,
+  "inter": 33,
+  "sep": 1.27,
+  "nearest": 31.3,
+  "minDT": 24
+ },
+ {
+  "n": 11,
+  "prompt": "「モグラ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 28.5,
+  "inter": 36,
+  "sep": 1.26,
+  "nearest": 28,
+  "minDT": 28
+ }
+]

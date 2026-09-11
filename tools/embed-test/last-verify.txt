@@ -1,16 +1,16 @@
 OK   別オリジンのページが開く title=埋め込み先の模擬サイト(別オリジン)
 OK   別オリジンでウィジェットが描画される タイル9枚
-OK   画像を cross-origin で読み込める {'n': 18, 'loaded': 18, 'src': 'http://localhost:3108/api/img/76f0d9cdc9ce580e93a5139c'}
-OK   画像URLがCAPTCHA本体を指している http://localhost:3108/api/img/76f0d9cdc9ce580e93a5139c
+OK   画像を cross-origin で読み込める {'n': 18, 'loaded': 18, 'src': 'http://localhost:3108/api/img/6aa446cfc32db0e4e232cbd5'}
+OK   画像URLがCAPTCHA本体を指している http://localhost:3108/api/img/6aa446cfc32db0e4e232cbd5
 OK   cross-origin で /api/challenge を取得できた(CORS) モード=not 正解8枚
-OK   お題が届いている 「ジッパー」が写っていない画像を全部選んでください
+OK   お題が届いている 「ヘアバン」が写っていない画像を全部選んでください
 OK   正解タイルを選択できる 8/8
-OK   別オリジンで解いてトークンを受け取れる token=69b5118ebf2799… (48字)
-OK   チケットも受け取れる ticket=8a081664d0…
+OK   別オリジンで解いてトークンを受け取れる token=b76fbaabbb31c8… (48字)
+OK   チケットも受け取れる ticket=f9c353f316…
 OK   トークン受領だけでは認証済みにしない state=トークン受領(サーバー未検証)
 OK   埋め込み先の登録ボタンが有効化される 有効
 OK   別オリジンのブラウザ経由でconsumeして認証済みになる state=認証済み(サーバー検証済み)
-OK   2つ目のトークンも取れる token2=b9d58eb27747…
+OK   2つ目のトークンも取れる token2=b9dfbe841dfb…
 OK   サーバー間で /api/consume できる(実際のBFF) HTTP200 {'ok': True}
 OK   同じトークンの二度使いは拒否される HTTP400 {'ok': False, 'error': 'トークンが無効です(期限切れ or 使用済み)'}
 OK   チケット無しの消費は拒否される HTTP400 {'ok': False, 'error': 'トークンが無効です(期限切れ or 使用済み)'}
