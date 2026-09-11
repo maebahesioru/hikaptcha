@@ -14,7 +14,9 @@ IMG_TRANSFORM=0 node server.mjs        # 画像改変を無効化(ffmpeg不要)
 MIN_SOLVE_MS=1500 node server.mjs      # サーバー実測の下限
 ```
 
-動作確認ページ: http://localhost:3107/
+動作確認ページ: `http://localhost:3107/`
+ドキュメントページ: `http://localhost:3107/docs`(このREADME.mdをその場でHTMLにして配信している。
+手書きのdocを別に持つと必ず食い違うので、READMEが唯一の情報源)
 
 ## 認証の層
 
@@ -421,7 +423,13 @@ node tools/test_multilayer.mjs        # 20 PASS / 0 FAIL
 # 他サイトへの埋め込み(模擬サイト:3200 が必要)
 node tools/embed-test/serve.mjs &     # 別オリジンの模擬サイト
 python tools/embed-test/verify-embed.py   # 18 PASS / 0 FAIL
+
+# ドキュメントページ(/docs の生成。本番:3107 が必要)
+node tools/verify_docs.mjs            # 27 PASS / 0 FAIL
 ```
+
+`verify_docs.mjs` は Markdown変換の単体チェック・README全セクションのHTML化・
+目次リンクと見出しIDの整合・生成HTMLの安全性(タグのエスケープ)まで見ている。
 
 ⚠️ どちらも**3回以上連続で回して確認する**。1回だけだと、外部ネットワークの所要時間や
 適応難易度の飽和で不安定になり、実バグを「フレーク」と誤認する(実測でそうなった)。

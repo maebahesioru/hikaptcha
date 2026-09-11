@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderDocsPage } from "./lib/docs.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -1657,6 +1658,17 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
       return await handleApi(req, res, url);
+    }
+
+    // ドキュメント: README.md をその場でHTMLにして配信する。
+    // (手書きのdocを別に持つとREADMEと必ず食い違うため、READMEを唯一の情報源にする)
+    if (url.pathname === "/docs" || url.pathname === "/docs/") {
+      const html = renderDocsPage(__dirname);
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      return res.end(html);
     }
 
     // 静的ファイル: / -> index.html, /captcha.js

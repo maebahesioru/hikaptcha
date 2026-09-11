@@ -32,7 +32,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🤖 ヒカマニCAPTCHA</h1>
+  <h1>🤖 ヒカマニCAPTCHA <a href="/docs" style="font-size:12px;font-weight:400;vertical-align:middle">docs</a></h1>
   <p class="sub">
     hikabooru(<a href="https://hikabooru.hikamers.app" target="_blank" rel="noopener">hikabooru.hikamers.app</a>)の実在画像で出題する多層認証CAPTCHA。<br>
     出題は6種類: 「◯◯の画像を全部選べ」/「◯◯が写っている画像を◯枚だけ選べ」/「◯◯が写っていない画像を全部選べ」/「◯◯が写っていない画像を◯枚だけ選べ」/「◯◯または△△が写っている画像を全部選べ」/「◯◯と△△の両方が写っている画像を全部選べ」。<br>
@@ -68,6 +68,7 @@
   </div>
 
   <p class="sub" style="margin-top:16px">
+    📖 <a href="/docs">ドキュメント(使い方・API・設定・実測した限界)</a><br>
     埋め込み例: このウィジェット(captcha.js)を他のサイトに貼れば、どのサイトの登録・投稿ゲートにも使える。<br>
     サーバー側では解決トークンを <code class="line">POST /api/consume {"token":"...","ticket":"..."}</code> に投げて1回だけ消費してから受け付ける。<br>
     ※ 外部CDN不使用・自鯖配信のためSRI対象外。画像は自前プロキシ経由で配信(元URLを隠す)。
