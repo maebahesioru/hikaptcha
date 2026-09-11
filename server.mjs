@@ -62,7 +62,11 @@ const POW_R = Number(process.env.POW_R || 8);
 const POW_P = Number(process.env.POW_P || 1);
 const POW_BITS = Number(process.env.POW_BITS || 6); // scrypt出力の先頭ゼロビット
 const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 9);
-const MIN_SOLVE_MS = Number(process.env.MIN_SOLVE_MS || 1500); // サーバー実測の下限(画像を見て選ぶ時間)
+const MIN_SOLVE_MS = Number(process.env.MIN_SOLVE_MS || 1500); // 人間が画像を見て選ぶ時間の期待値(ソフトなリスク加点に使う)
+// ハード拒否の下限。MIN_SOLVE_MS でハード拒否すると、画像がブラウザキャッシュに載った再訪や
+// 「1枚だけ選べ」のような一瞬で解ける出題で、正当な回答まで弾かれる(実測で発生)。
+// 人間には不可能な速さ(チャレンジ発行から 700ms 未満)だけを拒否する。
+const HARD_MIN_SOLVE_MS = Number(process.env.HARD_MIN_SOLVE_MS || 700);
 const MIN_HUMAN_MS = 700; // PoW時間を差し引いた「人間の操作時間」の下限
 const HONEYPOT_FIELD = "website"; // ボットが埋めがちな隠しフィールド名
 const RISK_REJECT = 2; // リスク点がこれ以上なら拒否
@@ -1471,7 +1475,7 @@ async function handleApi(req, res, url) {
         p: POW_P,
       },
       honeypot: HONEYPOT_FIELD,
-      minMs: MIN_SOLVE_MS,
+      minMs: MIN_SOLVE_MS, // クライアントはこれを待ってから回答を送る(ウィジェットが実装済み)
     });
   }
 
@@ -1558,7 +1562,7 @@ async function handleApi(req, res, url) {
     }
     // 4b. サーバー実測の経過時間(チャレンジ発行→回答到達)。クライアントは偽装できない
     const serverElapsed = Date.now() - c.createdAt;
-    if (serverElapsed < MIN_SOLVE_MS) {
+    if (serverElapsed < HARD_MIN_SOLVE_MS) {
       challenges.delete(id);
       return sendJson(res, 400, {
         ok: false,

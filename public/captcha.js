@@ -475,6 +475,18 @@
         layerStatus.hp = (hpInput && hpInput.value) ? "off" : "on";
         draw();
 
+        // サーバーは「チャレンジ発行→回答到達」の実測時間が短すぎる回答を弾く
+        // (人間が画像を見る時間を確保するため)。PoWが速く終わるとその下限を割って
+        // 正当な回答まで拒否されるので、ここで minMs まで待ってから送る。
+        // ⚠️ 実測: 画像がブラウザキャッシュに載っている2回目以降のアクセスで頻発した。
+        const minMs = Number(ch.minMs) || 0;
+        while (Date.now() - challengeAt < minMs) {
+          const left = minMs - (Date.now() - challengeAt);
+          progress = Math.max(1, Math.round((1 - left / minMs) * 100));
+          msg("確認中... (あと" + Math.ceil(left / 1000) + "秒)", false);
+          await new Promise(function (s) { setTimeout(s, Math.min(120, left)); });
+        }
+
         const payload = {
           id: ch.id,
           selected: Array.from(sel),

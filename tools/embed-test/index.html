@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>埋め込み先の模擬サイト(別オリジン)</title>
+<style>
+  body { margin: 0; padding: 24px; background: #101014; color: #e6e6ea;
+         font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { font-size: 13px; color: #8b8b96; margin: 0 0 20px; }
+  .box { max-width: 620px; background: #18181d; border: 1px solid #2e2e36; border-radius: 12px; padding: 16px; }
+  .row { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+  button { font: inherit; font-size: 14px; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
+  #signup { background: #0369a1; color: #fff; }
+  #signup:disabled { background: #2a2a33; color: #6b6b76; cursor: not-allowed; }
+  code { word-break: break-all; background: #0c0c10; border: 1px solid #2e2e36; border-radius: 6px;
+         padding: 6px; color: #7dd3fc; font-size: 11px; display: block; margin-top: 4px; }
+  .label { font-size: 12px; color: #8b8b96; margin-top: 10px; }
+  .ok { color: #4ade80; font-size: 13px; }
+  .ng { color: #f87171; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>埋め込み先の模擬サイト</h1>
+  <p class="sub">
+    このページは<b>別オリジン</b>(:3200)。CAPTCHA本体(:3108)から <code>captcha.js</code> を読み込み、
+    トークンを受け取る側のサンプル実装。ここが通れば「他サイトに埋め込める」と言える。
+  </p>
+
+  <div class="box">
+    <!-- ここにウィジェットが描画される -->
+    <div id="captcha"></div>
+
+    <div class="row">
+      <button id="signup" disabled>このサイトに登録する(認証必須)</button>
+      <span id="state" class="ng">未認証</span>
+    </div>
+
+    <div class="label">解決トークン(模擬サイトが受け取った値)</div>
+    <code id="token">(まだ無し)</code>
+    <div class="label">チケット(サーバー側の消費に必要)</div>
+    <code id="ticket">(まだ無し)</code>
+    <div class="label">模擬サイトの「サーバー」が /api/consume した結果</div>
+    <code id="consume">(まだ実行していない)</code>
+  </div>
+
+  <!-- 検証用フィクスチャ: 自前のCAPTCHAウィジェットを別オリジンから読む。
+       SRIは付けない(同一プロジェクトの配信物で、版が常に変わるため固定ハッシュが使えない)。 -->
+  <script src="http://localhost:3108/captcha.js"></script>
+  <script>
+    // 別オリジンのCAPTCHA本体を指す(apiBaseは必須)
+    var API = "http://localhost:3108";
+    window.__solved = null;
+
+    HikamaniCaptcha.render(document.getElementById("captcha"), {
+      apiBase: API,
+      onSolved: function (token, ticket) {
+        document.getElementById("token").textContent = token || "(空)";
+        document.getElementById("ticket").textContent = ticket || "(空)";
+        document.getElementById("signup").disabled = !token;
+        document.getElementById("state").textContent = "認証済み";
+        document.getElementById("state").className = "ok";
+        window.__solved = { token: token, ticket: ticket };
+      }
+    });
+
+    // 模擬サイトの「サーバー」が消費する処理を再現(BFFパターン)。
+    // 実際のサイトではこの部分を自前のサーバー側でやる(トークンをブラウザから受け取って消費)。
+    document.getElementById("signup").addEventListener("click", async function () {
+      var s = window.__solved;
+      var out = document.getElementById("consume");
+      if (!s || !s.token) { out.textContent = "トークンが無い"; return; }
+      try {
+        var r = await fetch(API + "/api/consume", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: s.token, ticket: s.ticket })
+        });
+        var j = await r.json();
+        out.textContent = "HTTP " + r.status + " " + JSON.stringify(j);
+      } catch (e) {
+        out.textContent = "例外: " + e.message;
+      }
+    });
+  </script>
+</body>
+</html>
