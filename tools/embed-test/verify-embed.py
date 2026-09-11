@@ -65,7 +65,13 @@ with sync_playwright() as p:
     def on_response(resp):
         if resp.url.endswith("/api/challenge") and resp.status == 200:
             try:
-                captured["body"] = resp.json()
+                j = resp.json()
+                captured["body"] = j
+                # 新しいchallengeが来たことをテスト側から検知できるようにする
+                try:
+                    pg.evaluate("(id) => { window.__capId = id; }", j.get("id"))
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -158,18 +164,71 @@ with sync_playwright() as p:
         state = pg.evaluate("() => document.getElementById('state').textContent")
         log("別オリジンで解いてトークンを受け取れる", bool(tok) and len(tok) > 10, f"token={tok[:14]}… ({len(tok)}字)")
         log("チケットも受け取れる", bool(tic) and len(tic) > 5, f"ticket={tic[:10]}…")
-        log("埋め込み先の登録ボタンが有効化される", state == "認証済み", f"state={state}")
+        # トークン受領の時点では「未検証」であること(クライアントだけで認証済みにしない)
+        log("トークン受領だけでは認証済みにしない", "未検証" in state, f"state={state}")
+        log("埋め込み先の登録ボタンが有効化される", pg.evaluate("() => !document.getElementById('signup').disabled"), "有効")
 
-        # 埋め込み先のサーバー役が消費する
-        st, body2 = consume(tok, tic)
-        log("埋め込み先が /api/consume でトークンを消費できる", st == 200 and body2.get("ok") is True, f"HTTP{st} {body2}")
+        # --- ラウンドA: 埋め込み先の「サーバー」が消費する(BFFパターン) ---
+        # ここで初めて認証が成立する。UIがサーバー検証に追従しているかも見る。
+        pg.evaluate("() => document.getElementById('signup').click()")
+        pg.wait_for_function(
+            "() => /認証済み|認証失敗/.test(document.getElementById('state').textContent)",
+            timeout=25000,
+        )
+        state2 = pg.evaluate("() => document.getElementById('state').textContent")
+        log("別オリジンのブラウザ経由でconsumeして認証済みになる", "サーバー検証済み" in state2, f"state={state2}")
 
-        # ワンタイムか(二度目は拒否)
-        st2, body2b = consume(tok, tic)
+        # --- ラウンドB: サーバー間のconsume(実際のBFF)と、使い回しの拒否 ---
+        # 新しい問題を解いて、2つ目のトークンを取る
+        pg.evaluate("() => { const sr=document.getElementById('captcha').shadowRoot;"
+                    " const b=[...sr.querySelectorAll('.hkc-btn')].find(x=>/別の問題|やり直/.test(x.textContent)); if(b) b.click(); }")
+        pg.wait_for_function(
+            "() => { const h=document.getElementById('captcha');"
+            " return h && h.shadowRoot && h.shadowRoot.querySelectorAll('.hkc-tile').length===9; }",
+            timeout=30000,
+        )
+        # 2回目は「1つ目とは別のchallenge」が届くまで待つ(固定待ちだと取りこぼす)
+        first_id = body.get("id")
+        try:
+            pg.wait_for_function(
+                "(fid) => window.__capId && window.__capId !== fid",
+                arg=first_id,
+                timeout=30000,
+            )
+        except Exception as e:
+            print("   2つ目のchallenge待ちでタイムアウト:", str(e)[:80])
+        pg.wait_for_function(
+            "() => { const h=document.getElementById('captcha');"
+            " return h && h.shadowRoot && h.shadowRoot.querySelectorAll('.hkc-tile').length===9; }",
+            timeout=30000,
+        )
+        body2nd = captured.get("body") or {}
+        idx2 = [i for i, t in enumerate(body2nd.get("tiles") or []) if t.get("target")]
+        print(f"   2つ目: モード={body2nd.get('mode')} 正解{len(idx2)}枚")
+        pg.evaluate(
+            r"""(idx) => {
+          const sr = document.getElementById('captcha').shadowRoot;
+          [...sr.querySelectorAll('.hkc-tile')].forEach((t,i) => { if (idx.includes(i)) t.click(); });
+        }""",
+            idx2,
+        )
+        pg.evaluate("() => document.getElementById('captcha').shadowRoot.querySelector('.hkc-btn.ok').click()")
+        pg.wait_for_function(
+            "() => { const t=document.getElementById('token').textContent; return t && t.length > 10 && t !== "
+            + repr(tok) + "; }",
+            timeout=60000,
+        )
+        tok2 = pg.evaluate("() => document.getElementById('token').textContent")
+        tic2 = pg.evaluate("() => document.getElementById('ticket').textContent")
+        log("2つ目のトークンも取れる", tok2 != tok and len(tok2) > 10, f"token2={tok2[:12]}…")
+
+        st, body2 = consume(tok2, tic2)
+        log("サーバー間で /api/consume できる(実際のBFF)", st == 200 and body2.get("ok") is True, f"HTTP{st} {body2}")
+
+        st2, body2b = consume(tok2, tic2)
         log("同じトークンの二度使いは拒否される", not (st2 == 200 and body2b.get("ok") is True), f"HTTP{st2} {body2b}")
 
-        # チケット無しでの消費は拒否(横流し対策の確認)
-        st3, body3 = consume(tok, "")
+        st3, body3 = consume(tok2, "")
         log("チケット無しの消費は拒否される", not (st3 == 200 and body3.get("ok") is True), f"HTTP{st3} {body3}")
 
     pg.screenshot(path=f"{SHOT}/embed-site.png", full_page=True)

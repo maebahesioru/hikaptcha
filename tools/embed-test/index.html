@@ -36,6 +36,11 @@
       <button id="signup" disabled>このサイトに登録する(認証必須)</button>
       <span id="state" class="ng">未認証</span>
     </div>
+    <p class="sub" style="margin:8px 0 0">
+      ※ 状態は「トークン受領」と「サーバー検証済み」を区別しています。
+      本当の認証はサーバー側の /api/consume が成功した時点で成立するので、
+      クライアントはトークンを受け取っただけでは未認証のままにすべきです。
+    </p>
 
     <div class="label">解決トークン(模擬サイトが受け取った値)</div>
     <code id="token">(まだ無し)</code>
@@ -59,8 +64,11 @@
         document.getElementById("token").textContent = token || "(空)";
         document.getElementById("ticket").textContent = ticket || "(空)";
         document.getElementById("signup").disabled = !token;
-        document.getElementById("state").textContent = "認証済み";
-        document.getElementById("state").className = "ok";
+        // ⚠️ ここは「トークンを受け取った」だけ。認証の成立はサーバー側の消費が成功した時点。
+        // クライアントだけで「認証済み」にしてしまうと、トークンを消費せずに登録できてしまう
+        // (ワンタイムトークンを使い回せてしまう)ので、状態を分けて表示する。
+        document.getElementById("state").textContent = "トークン受領(サーバー未検証)";
+        document.getElementById("state").className = "ng";
         window.__solved = { token: token, ticket: ticket };
       }
     });
@@ -79,6 +87,15 @@
         });
         var j = await r.json();
         out.textContent = "HTTP " + r.status + " " + JSON.stringify(j);
+        // サーバー側の消費が成功して初めて認証成立
+        if (j && j.ok === true) {
+          document.getElementById("state").textContent = "認証済み(サーバー検証済み)";
+          document.getElementById("state").className = "ok";
+          window.__authed = true;
+        } else {
+          document.getElementById("state").textContent = "認証失敗";
+          document.getElementById("state").className = "ng";
+        }
       } catch (e) {
         out.textContent = "例外: " + e.message;
       }

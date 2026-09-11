@@ -63,10 +63,11 @@ const POW_P = Number(process.env.POW_P || 1);
 const POW_BITS = Number(process.env.POW_BITS || 6); // scrypt出力の先頭ゼロビット
 const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 9);
 const MIN_SOLVE_MS = Number(process.env.MIN_SOLVE_MS || 1500); // 人間が画像を見て選ぶ時間の期待値(ソフトなリスク加点に使う)
-// ハード拒否の下限。MIN_SOLVE_MS でハード拒否すると、画像がブラウザキャッシュに載った再訪や
-// 「1枚だけ選べ」のような一瞬で解ける出題で、正当な回答まで弾かれる(実測で発生)。
-// 人間には不可能な速さ(チャレンジ発行から 700ms 未満)だけを拒否する。
-const HARD_MIN_SOLVE_MS = Number(process.env.HARD_MIN_SOLVE_MS || 700);
+// ハード拒否の下限。既定は MIN_SOLVE_MS と同じ値にして「人間には不可能な速さ」を確実に弾く。
+// ⚠️ 以前はウィジェットが minMs を待たずに送信していたため、この値で正当な回答まで弾かれていた
+//    (画像がキャッシュ済みの再訪などで 1500ms を割った)。いまはウィジェットが minMs を待つので
+//    人間の回答は必ず下限を超える。カスタム実装に寛容にしたい場合だけ下げる。
+const HARD_MIN_SOLVE_MS = Number(process.env.HARD_MIN_SOLVE_MS || MIN_SOLVE_MS);
 const MIN_HUMAN_MS = 700; // PoW時間を差し引いた「人間の操作時間」の下限
 const HONEYPOT_FIELD = "website"; // ボットが埋めがちな隠しフィールド名
 const RISK_REJECT = 2; // リスク点がこれ以上なら拒否
