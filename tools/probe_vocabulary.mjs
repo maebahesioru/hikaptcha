@@ -24,3 +24,7 @@ console.log(`出題${ok}件 ${JSON.stringify(modes)}${fails ? ` (失敗${fails})
 console.log(`延べ${total}回 / 異なり${cnt.size}種 / 再出率 ${(100 * (1 - cnt.size / total)).toFixed(1)}%`);
 console.log(`1回だけ出たタグ: ${once}種 (${((once / cnt.size) * 100).toFixed(0)}%) / 2回以上: ${multi.length}種`);
 console.log(`再出の多い順: ${multi.slice(0, 15).map(([t, c]) => `${t}×${c}`).join("  ") || "(なし)"}`);
+if (process.argv.includes("--list")) {
+  const all = [...cnt.entries()].sort((a, b) => b[1] - a[1]).map(([t, c]) => (c > 1 ? `${t}×${c}` : t));
+  console.log(`\n出たタグ全部(${all.length}種):\n  ${all.join("  ")}`);
+}

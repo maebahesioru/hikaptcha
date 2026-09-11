@@ -1,0 +1,90 @@
+[
+ {
+  "n": 0,
+  "prompt": "「礼服」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 7,
+  "intra": 31.7,
+  "inter": 30.9,
+  "sep": 0.97,
+  "nearest": 26.5,
+  "minDT": 25
+ },
+ {
+  "n": 1,
+  "prompt": "「アルコール」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 32.3,
+  "inter": 33.1,
+  "sep": 1.03,
+  "nearest": 27,
+  "minDT": 27
+ },
+ {
+  "n": 2,
+  "prompt": "「長袖」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.5,
+  "inter": 32.9,
+  "sep": 1.04,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 3,
+  "prompt": "「黒い鉄格子」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 25,
+  "inter": 29.4,
+  "sep": 1.17,
+  "nearest": 25.9,
+  "minDT": 19
+ },
+ {
+  "n": 4,
+  "prompt": "「ブレイザー」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.2,
+  "inter": 31.3,
+  "sep": 1,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 5,
+  "prompt": "「青いネクタイ」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 3,
+  "intra": 34.7,
+  "inter": 31.3,
+  "sep": 0.9,
+  "nearest": 26.8,
+  "minDT": 17
+ },
+ {
+  "n": 6,
+  "prompt": "「茶髪」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 3,
+  "intra": 34.7,
+  "inter": 32.4,
+  "sep": 0.94,
+  "nearest": 27.5,
+  "minDT": 22
+ },
+ {
+  "n": 7,
+  "prompt": "「羽毛」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 27,
+  "inter": 29.2,
+  "sep": 1.08,
+  "nearest": 26.3,
+  "minDT": 14
+ }
+]
