@@ -43,7 +43,9 @@ const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費�
 // IPごとの出題+回答の上限。固定窓だと「使い切ったら窓が終わるまで全拒否」で
 // 待ち時間が最大10分になり、人間の試行錯誤でも詰まる(実測で自分でも踏んだ)。
 // → トークンバケットにして**使った分が少しずつ回復する**方式にした(崖を作らない)。
-const IP_QUOTA = Number(process.env.IP_QUOTA || 100); // 同時に持てるトークン数(バースト許容)
+// レート制限は既定で無効(0=無制限)。仕組みは残してあり、IP_QUOTA を入れれば有効化できる。
+// 以前は「10分で100回」で運用していたが、自分の検証や通常利用で引っかかるだけで不要だった。
+const IP_QUOTA = Number(process.env.IP_QUOTA || 0); // 0 で無制限
 const IP_REFILL_MS = Number(process.env.IP_REFILL_MS || 3000); // 1トークン回復する間隔(既定3秒=20回/分)
 // 開発・検証はローカル/プライベートIPからなので、そこは制限しない(自分で詰まらせないため)。
 // 公開時はリバースプロキシが X-Forwarded-For を付けるので、外からのアクセスには効く。
@@ -76,7 +78,8 @@ const TICKET_TTL_MS = 5 * 60 * 1000;
 const IMG_FETCH_MIN_RATIO = 0.75; // 出題画像のうち最低これだけ実際に取得されていること
 const CLAIM_SLACK_MS = 5000; // クライアント申告が実測より大きく超えたら不正とみなす余裕
 // IPごとの「PoW仕事量」予算(期待試行数の累計)。突破速度そのものを頭打ちにする
-const IP_WORK_BUDGET = Number(process.env.IP_WORK_BUDGET || 5000);
+// PoWの累計仕事量の予算。既定は無制限(0=無制限)。IP_QUOTA と同じく必要時のみ有効化する。
+const IP_WORK_BUDGET = Number(process.env.IP_WORK_BUDGET || 0); // 0 で無制限
 const IP_WORK_WINDOW_MS = 10 * 60 * 1000;
 
 const challenges = new Map(); // id -> {prompt, createdAt, tiles, attempts, ip, pow, ticket, imgFetched}
@@ -168,6 +171,7 @@ function powScryptOk(challenge, nonce, salt, bits, N, r, p) {
 // 計算資源で突破されても、IPあたりの総仕事量を頭打ちにすれば速度を制限できる
 // 計算認証の累計仕事量の予算。上限に達したら「いつ回復するか」も返す。
 function chargeWork(ip, bits, exempt) {
+  if (IP_WORK_BUDGET <= 0) return { ok: true }; // 無制限(既定)
   const now = Date.now();
   const cost = Math.pow(2, Math.max(0, Math.min(20, bits)));
   if (exempt) return { ok: true };
@@ -891,19 +895,17 @@ function pickDiverse(pool, count, sets, already, srcOf, usedSrc) {
 
 // 出題生成の同時実行数。booru API と ffmpeg を叩くので、無制限に並走させると
 // 自分のリソースで詰まって 502(問題を準備できませんでした)が多発する
-// (実測: 同時130発で68件が502)。上限を設けて順番に処理し、待ちすぎたら 503 を返す。
+// (実測: 同時130発で68件が502)。
+// → 同時実行だけ絞って**順番待ちは無制限**にする(拒否しない)。
+//    負荷が来たら「エラーで弾く」のではなく「時間がかかる」方向に倒す。
+//    レート制限は既定で無効なので、これが唯一の流量調整になる。
 const MAKE_CONCURRENCY = Number(process.env.MAKE_CONCURRENCY || 4);
 let makeRunning = 0;
 const makeQueue = [];
 
 async function withMakeSlot(fn) {
   if (makeRunning >= MAKE_CONCURRENCY) {
-    if (makeQueue.length >= MAKE_CONCURRENCY * 8) {
-      const err = new Error("busy");
-      err.busy = true;
-      throw err;
-    }
-    await new Promise((res, rej) => makeQueue.push({ res, rej }));
+    await new Promise((res) => makeQueue.push({ res }));
   }
   makeRunning++;
   try {
@@ -1279,6 +1281,8 @@ function isExemptRequest(req) {
 }
 
 function checkQuota(req) {
+  // レート制限なし(既定)。仕組み自体は残してあるので IP_QUOTA を入れれば効く。
+  if (IP_QUOTA <= 0) return { ok: true, remaining: Infinity, retryAfterMs: 0 };
   if (isExemptRequest(req)) return { ok: true, remaining: Infinity, retryAfterMs: 0, exempt: true };
   const ip = clientIp(req);
   const now = Date.now();
@@ -1435,16 +1439,8 @@ async function handleApi(req, res, url) {
       const old = mine.shift();
       challenges.delete(old.id);
     }
-    let c;
-    try {
-      c = await withMakeSlot(() => makeChallenge());
-    } catch (e) {
-      if (e && e.busy) {
-        // 混雑で処理しきれない場合は、待ち時間を示して再試行してもらう
-        return sendTooMany(res, 3000, { error: "アクセスが集中しています。あと約3秒で再開できます" });
-      }
-      throw e;
-    }
+    // 順番待ちは無制限なので、混雑時は「遅くなる」だけで拒否しない
+    const c = await withMakeSlot(() => makeChallenge());
     if (!c) {
       return sendJson(res, 502, { error: "問題を準備できませんでした。少し待ってからもう一度お試しください" });
     }
