@@ -53,8 +53,10 @@ check("太字/斜体/コード/リンクが変換される",
   h.includes("<code>コード</code>") && h.includes('<a href="https://example.com/a?b=1&amp;c=2"'));
 check("コードブロックがpre/codeになり、中のHTMLタグがエスケープされる",
   h.includes("<pre class=\"code\" data-lang=\"bash\">") && h.includes("&lt;div id=x&gt;") && !h.includes("<div id=x>"));
+// セルには class が付くことがある(改行制御の nw 等)ので、属性に依存せず構造で見る
 check("表がtableになり、セル内のインライン記法も効く",
-  h.includes("<table>") && h.includes("<th>列A</th>") && h.includes("<td><code>x</code></td>") && h.includes("<td><strong>y</strong></td>"));
+  h.includes("<table>") && h.includes("<th>列A</th>") &&
+  /<td[^>]*><code>x<\/code><\/td>/.test(h) && /<td[^>]*><strong>y<\/strong><\/td>/.test(h));
 check("箇条書きがul/olになる", h.includes("<ul><li>項目1</li>") && h.includes("<ol><li>手順1</li>"));
 check("引用と区切りが変換される", h.includes("<blockquote>引用文</blockquote>") && h.includes("<hr>"));
 check("生のMarkdownが残っていない(``` も |---| も無い)",

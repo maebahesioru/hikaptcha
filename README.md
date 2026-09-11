@@ -18,6 +18,260 @@ MIN_SOLVE_MS=1500 node server.mjs      # サーバー実測の下限
 ドキュメントページ: `http://localhost:3107/docs`(このREADME.mdをその場でHTMLにして配信している。
 手書きのdocを別に持つと必ず食い違うので、READMEが唯一の情報源)
 
+`tools/api_walkthrough.mjs` を使うと、**下に書いてある全リクエストを実際に投げて応答を表示する**
+(ドキュメントの例はこのスクリプトで取った実物):
+
+```bash
+node tools/api_walkthrough.mjs http://localhost:3108   # 正解付きのデバッグコピー
+```
+
+## 使い方(クイックスタート)
+
+### 1. CAPTCHAサーバーを立てる
+
+```bash
+node server.mjs          # http://localhost:3107
+```
+
+### 2. サイトに埋め込む(フロント側)
+
+```html
+<div id="captcha"></div>
+<script src="https://CAPTCHAサーバーのURL/captcha.js"></script>
+<script>
+  HikamaniCaptcha.render(document.getElementById("captcha"), {
+    apiBase: "https://CAPTCHAサーバーのURL",
+    // 解けた瞬間に呼ばれる。この時点ではまだ「未検証」
+    onSolved: function (token, ticket) {
+      fetch("/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: token, ticket: ticket, name: "..." /* フォームの中身 */ }),
+      });
+    },
+  });
+</script>
+```
+
+ウィジェットがやること: 出題の取得 → 9枚の表示 → 選択UI → **PoW(scrypt)を解く** → `minMs` 待ち →
+`/api/verify` への送信 → 失敗時はその場で再挑戦(新しい出題を自動で取り直す)。
+`captcha.js` は **Shadow DOM** の中で描画するので、埋め込み先のCSSで見た目が崩れない。
+
+### 3. サーバー側で「消費」してから受け付ける(**必須**)
+
+```js
+// 登録・投稿を受け付ける前に、必ず consume を通す
+const r = await fetch("https://CAPTCHAサーバーのURL/api/consume", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ token, ticket }),
+});
+const j = await r.json();
+if (!j.ok) return res.status(400).json({ error: "認証に失敗しました" });
+// ここから先が「人間が通った」処理(登録・投稿など)
+```
+
+```bash
+# シェルから確認する場合
+curl -X POST https://CAPTCHAサーバーのURL/api/consume \
+  -H "content-type: application/json" \
+  -d '{"token":"...","ticket":"..."}'
+# => {"ok":true}
+```
+
+⚠️ **これを忘れると認証が素通りする。** トークンは**使い切り**なので、一度消費したトークンは
+2回目で必ず失敗する(保存して使い回すことはできない)。トークンの有効期限は**5分**。
+
+⚠️ **クライアントの表示だけで「認証済み」にしない。** `onSolved` が呼ばれた時点は「未検証」で、
+本当の認証は**あなたのサーバーが `/api/consume` に成功した時点**で成立する。
+クライアント側の表示だけで通すと、トークンを消費せずに登録できてしまう。
+
+## 認証フロー
+
+```
+ブラウザ                         CAPTCHAサーバー                 あなたのサーバー
+  │ ①GET /api/challenge ──────────▶ 出題を作る(画像9枚+PoW課題+チケット)
+  │ ◀── tiles[9] / pow / ticket / minMs
+  │ ②GET /api/img/<id> ×9 ───────▶ 画像を配信(**取得したことを記録**)
+  │ ③人が画像を選ぶ
+  │ ④scryptでPoWを解く(実測 100〜300ms)
+  │ ⑤minMs まで待つ(人が見る時間の下限。ウィジェットが実装済み)
+  │ ⑥POST /api/verify ───────────▶ 全層を検証(下表)
+  │ ◀── {ok:true, token, risk, serverElapsedMs, imagesFetched}
+  │                                                         │
+  │ ⑦POST /register {token,ticket} ───────────────────────▶ ⑧POST /api/consume ─▶ CAPTCHA
+  │                                                         │ ◀── {ok:true}(ワンタイム)
+  │ ◀──────── 登録完了(ここで初めて「人間」とみなす)
+```
+
+⚠️ **⑦で `ticket` も一緒に送る必要がある。** トークンは発行時のチケットに束縛されていて、
+チケットが一致しないと消費できない(=他人のトークンを拾っても使えない)。
+
+| # | `/api/verify` で確認していること | 通らないと |
+|---|---|---|
+| 1 | 選択した画像が正解と完全一致 | 400(残り試行を返す)/ 3回で410 |
+| 2 | **画像が実際に配信されたか**(未取得ならボット) | 400 `画像が読み込まれていません` |
+| 3 | **実測時間**(チャレンジ発行〜回答到達) | 400 `回答が速すぎます` |
+| 4 | PoWのnonceが正しいか(scrypt) | 410 `認証に失敗しました` |
+| 5 | チケットが有効か | 410 `認証セッションが無効です` |
+| 6 | ハニーポット欄が空か | 400 `自動入力を検出しました` |
+| 7 | 挙動シグナル(操作の有無・移動量) | 通るが `risk` が上がる(ソフト) |
+| 8 | 申告した所要時間と実測の整合 | 400 `申告値と実測値が一致しません` |
+
+`risk` は加点方式の**ソフトな指標**(0〜6程度)。埋め込み先で「risк 3以上は手動確認」のように
+使えるが、**判定は必須ではない**(通過の可否は上記1〜8で決まる)。
+
+## APIリファレンス
+
+すべて `Content-Type: application/json`。`/api/*` には CORS ヘッダ
+(`Access-Control-Allow-Origin: *`)が付き、`OPTIONS` プリフライトにも応答する。
+
+### GET /api/challenge
+
+出題を1件作る。パラメータは無し。**本番は正解(`target`)を返さない**(デバッグコピーのみ付く)。
+
+```bash
+curl -s http://localhost:3107/api/challenge
+```
+
+実際の応答(デバッグコピーで正解を可視化したもの):
+
+```json
+{
+  "id": "056ae9330ba4f6e6",
+  "mode": "or",
+  "ask": {
+    "mode": "or",
+    "tags": ["ボディスーツ", "上着"],
+    "n": 0,
+    "maxSelect": 0,
+    "text": "「ボディスーツ」または「上着」が写っている画像を全部選んでください"
+  },
+  "tags": ["ボディスーツ", "上着"],
+  "prompt": "「ボディスーツ」または「上着」が写っている画像を全部選んでください",
+  "tiles": [
+    { "id": "cc8d38f9a970", "url": "http://localhost:3108/api/img/87e109dd625070e75935c5b8" }
+  ],
+  "ticket": "75d0ef125e92...(48字)",
+  "pow": { "algo": "scrypt", "challenge": "ee27257df6cd...(32字)", "salt": "7dbbd3117261...(32字)",
+           "bits": 6, "N": 1024, "r": 8, "p": 1 },
+  "honeypot": "website",
+  "minMs": 1500
+}
+```
+
+| フィールド | 説明 |
+|---|---|
+| `id` | 出題ID。`/api/verify` にそのまま返す |
+| `ask.text` | **画面に出す文面そのもの**。サーバーが組み立てるのでクライアントで作らない |
+| `ask.mode` | 6形式(`single`/`pick`/`not`/`notpick`/`or`/`and`) |
+| `ask.tags` | お題のタグ(1〜2個) |
+| `ask.n` | `pick`/`notpick` の枚数 |
+| `ask.maxSelect` | 選べる枚数の上限。**0は無制限**(全部選ぶ形式) |
+| `tiles[]` | `id` と画像URL。URLは**不透明ID**経由で元投稿は分からない |
+| `ticket` | 認証セッション。消費時にも必要 |
+| `pow` | scryptのパラメータ。`nonce` を探して `leadingZeroBits(scrypt(challenge+":"+nonce, salt)) >= bits` にする |
+| `honeypot` | 人間には見えない入力欄の `name`(ここでは `website`)。**記入されたら即ボット判定** |
+| `minMs` | 回答を送るまでの下限。これを待たずに送ると `回答が速すぎます` になる |
+
+⚠️ 同一IPで保持する出題は**最大10件**で、超えると古いものから捨てられる(別タブ・NAT対策)。
+
+### GET /api/img/<imgId>
+
+画像プロキシ。配信時に長辺640pxへ縮小+3:2へ整形+再圧縮したものを返す(`cache-control: no-store`)。
+**「誰がどの画像を見たか」をサーバーが記録していて、1枚も取得していない回答は拒否される。**
+
+### POST /api/verify
+
+```bash
+curl -X POST http://localhost:3107/api/verify -H "content-type: application/json" -d '{
+  "id": "056ae9330ba4f6e6",
+  "selected": ["cc8d38f9a970", "61635834b910"],
+  "ticket": "75d0ef125e92...",
+  "nonce": "127",
+  "elapsedMs": 2677,
+  "signals": { "interactionSeen": true, "pointerMoves": 24, "clicks": 2, "touchSeen": false, "powMs": 286 }
+}'
+```
+
+成功(実物):
+
+```json
+{ "ok": true, "token": "6a827406145deca2b3ff94fb54c9fd4ecb4e3178cc897805", "risk": 0,
+  "serverElapsedMs": 2677, "imagesFetched": 9 }
+```
+
+| リクエスト | 説明 |
+|---|---|
+| `selected[]` | 選んだタイルの `id`。**過不足なく**一致しないと不正解 |
+| `nonce` | PoWの解(文字列) |
+| `elapsedMs` | クライアントが測った所要時間(実測と大きく食い違うと拒否) |
+| `signals.interactionSeen` | 操作が観測されたか(クリック/ポインタ/キー) |
+| `signals.pointerMoves` | ポインタ移動の回数 |
+| `signals.touchSeen` | タッチ操作だったか(移動量の判定を緩める) |
+| `signals.touchedHidden` | 隠し要素に触れたか(**触れたら減点**) |
+| `signals.powMs` | PoWに要した時間 |
+| `website` | ハニーポット(`challenge.honeypot` の名前で送る)。**空で送る** |
+
+| レスポンス | 説明 |
+|---|---|
+| `token` | ワンタイム解決トークン(48字)。`/api/consume` に渡す |
+| `risk` | ソフトなリスク値(0=きれい) |
+| `serverElapsedMs` | サーバー実測の所要時間 |
+| `imagesFetched` | 実際に取得された画像の枚数 |
+
+### POST /api/consume
+
+**あなたのサーバーから呼ぶ**(ブラウザから直接でもよいが、判定はサーバー側で完結させること)。
+
+```json
+{ "ok": true }
+```
+
+### GET /api/health
+
+```json
+{ "ok": true, "stats": { "challenges": 12, "tagRejects": 5, "modes": {"single": 7}, "relatedPromoted": 2 } }
+```
+
+`stats` には出題数・フィルタの却下数・形式の内訳・空振り理由(`fShortBatch` 等)が入る。
+**「出題が遅い/出ない」を調べるのはまずここ。**
+
+## エラー一覧(実際に返るメッセージ)
+
+| ステータス | メッセージ | 意味 |
+|---|---|---|
+| 400 | 違う画像が混ざっています(あとN回)。選び直してください | 選択が不正解。`remaining` に残り試行 |
+| 400 | 自動入力を検出しました。最初からやり直してください | ハニーポットに記入された(ボット) |
+| 400 | 画像が読み込まれていません。ページを再読み込みしてもう一度お試しください | 画像を1枚も取らずに回答した |
+| 400 | 回答が速すぎます。もう一度やり直してください | 実測が `HARD_MIN_SOLVE_MS` 未満 |
+| 400 | 申告値と実測値が一致しません。もう一度やり直してください | `elapsedMs` の申告が実測と大きく違う |
+| 400 | トークンがありません / トークンが無効です(期限切れ or 使用済み) | consumeの失敗(未指定・消費済み) |
+| 400 | トークンの期限が切れています | トークンの5分TTL切れ |
+| 400 | トークンと認証セッションが一致しません | チケット不一致(横流し) |
+| 410 | 不正解です。新しい問題に挑戦してください | 3回失敗して出題を破棄 |
+| 410 | 出題が見つかりません。もう一度やり直してください | 出題IDが無効(破棄済み・未発行) |
+| 410 | 出題の期限が切れました。もう一度やり直してください | 出題のTTL切れ |
+| 410 | 認証セッションが無効です。もう一度やり直してください | チケットが無効 |
+| 429 | リクエストが多すぎます。あと約N秒で再開できます | レート制限(**既定は無効**=`IP_QUOTA=0`) |
+| 502 | 問題を準備できませんでした。少し待ってからもう一度お試しください | 出題生成の連続失敗(時間をおく) |
+
+`410` は「その出題はもう使えない」の意味なので、**クライアントは新しい出題を取り直す**こと
+(同梱のウィジェットは自動でそうする)。
+
+## トラブルシューティング
+
+| 症状 | 原因と対処 |
+|---|---|
+| **認証が素通りする** | `/api/consume` を呼んでいない。呼ばないとトークンは永遠に有効なまま(5分) |
+| 毎回 `回答が速すぎます` | ウィジェットを使わず自前実装している。`minMs` を待ってから送る |
+| 毎回 `画像が読み込まれていません` | タイル画像を取得せずに `/api/verify` を叩いている(取得が必須) |
+| `429` が返る | `IP_QUOTA` を設定した時だけ出る。既定(0)では出ない |
+| 埋め込み先で見た目が崩れる | `captcha.js` は Shadow DOM で隔離しているので、通常は影響しない。`apiBase` の指定漏れを確認 |
+| 出題が返らない・遅い | `/api/health` の `stats` を見る(`fShortBatch` 等の空振り理由) |
+| 出題形式を固定して試したい | `FORCE_MODE=single node server.mjs` |
+| 正解を見ながら試したい | `python tools/make_debug_copy.py` → `PORT=3108 node <コピー先>/server.mjs`(正解付き) |
+
 ## 認証の層
 
 | 層 | 内容 | 何を防ぐか | 実測 |
@@ -276,19 +530,8 @@ challenges: 40, tagRejects: 8, visRejects: 5, relaxedUsed: 11
 本当の認証は**埋め込み先のサーバーが `/api/consume` に成功した時点**で成立する。
 クライアント側の表示だけで通してしまうと、トークンを消費せずに登録できてしまう(使い回せる)。
 
-埋め込み方(BFFパターン):
-
-```html
-<div id="captcha"></div>
-<script src="https://CAPTCHAサーバー/captcha.js"></script>
-<script>
-  HikamaniCaptcha.render(document.getElementById("captcha"), {
-    apiBase: "https://CAPTCHAサーバー",
-    // トークンとチケットを自前サーバーに渡し、サーバー側で /api/consume する
-    onSolved: function (token, ticket) { /* 自サイトの登録フォームへ */ },
-  });
-</script>
-```
+埋め込み方とサーバー側の消費のしかたは **「使い方(クイックスタート)」** を参照
+(この節は「本当に別オリジンで動くのか」を実測した記録)。
 
 ### 複数サイトで使うなら足りないもの(正直に)
 
@@ -383,37 +626,6 @@ hikabooruのタグはAIが一括付与したもので、**個々の画像に対�
 | `IP_QUOTA_EXEMPT_LOCAL` | 1 | `0`でローカル/プライベートIPも制限する(検証用) |
 | `MAKE_CONCURRENCY` | 4 | 出題生成の同時実行数。超過分は**無制限に順番待ち**(拒否しない) |
 
-## API
-
-| メソッド | パス | 内容 |
-|---|---|---|
-| GET | `/api/challenge` | 出題 `{id, prompt, ask:{mode,tags,n,maxSelect,text}, tags[], mode, tiles, ticket, pow:{...}, honeypot, minMs}`(`mode` は6形式。`ask.maxSelect`=選択できる枚数、0は無制限) |
-| GET | `/api/img/<imgId>` | 画像プロキシ(改変配信+取得記録) |
-| POST | `/api/verify` | `{id, selected, ticket, nonce, elapsedMs, signals, [honeypot]}` → 全層通過で `{ok:true, token, risk, serverElapsedMs, imagesFetched}` |
-| POST | `/api/consume` | `{token, ticket}` → 埋め込み先が登録前に消費 `{ok:true}` |
-| GET | `/api/health` | 生存確認 + 品質フィルタの統計(`stats`)。形式の内訳(`modes`)・空振り理由(`fShortBatch`等)が見える |
-
-## 埋め込み方
-
-```html
-<div id="captcha"></div>
-<script src="https://CAPTCHAサーバーのURL/captcha.js"></script>
-<script>
-  HikamaniCaptcha.render(document.getElementById("captcha"), {
-    apiBase: "https://CAPTCHAサーバーのURL",
-    onSolved: function (token, ticket) { /* 自サイトの登録フォームへ */ },
-  });
-</script>
-```
-
-サーバー側は受け付ける前に必ず消費する(呼ばないと認証が素通りします):
-
-```bash
-curl -X POST https://CAPTCHAサーバー/api/consume \
-  -H "Content-Type: application/json" \
-  -d '{"token":"...","ticket":"..."}'
-```
-
 ## テスト
 
 ```bash
@@ -425,11 +637,14 @@ node tools/embed-test/serve.mjs &     # 別オリジンの模擬サイト
 python tools/embed-test/verify-embed.py   # 18 PASS / 0 FAIL
 
 # ドキュメントページ(/docs の生成。本番:3107 が必要)
-node tools/verify_docs.mjs            # 27 PASS / 0 FAIL
+node tools/verify_docs.mjs            # 27 PASS / 0 FAIL(Markdown変換の単体+目次リンク+エスケープ)
+python tools/verify-docs.py           # 17 PASS / 0 FAIL(実ブラウザで描画・はみ出し・コンソールエラー)
 ```
 
 `verify_docs.mjs` は Markdown変換の単体チェック・README全セクションのHTML化・
 目次リンクと見出しIDの整合・生成HTMLの安全性(タグのエスケープ)まで見ている。
+`verify-docs.py` は Playwright で実ページを開き、**横スクロールが出ていないか**・
+**コンソールエラーが無いか**・READMEの見出しが全部出ているかを実測する。
 
 ⚠️ どちらも**3回以上連続で回して確認する**。1回だけだと、外部ネットワークの所要時間や
 適応難易度の飽和で不安定になり、実バグを「フレーク」と誤認する(実測でそうなった)。
@@ -449,8 +664,10 @@ npm run debug-copy       # 正解付きテスト用コピー(:3108)を生成
 FROM node:22-alpine
 WORKDIR /app
 RUN apk add --no-cache ffmpeg   # 画像改変に使う(無いと改変だけ無効)
-COPY package.json server.mjs ./
+COPY package.json server.mjs tag_reject.json ./
 COPY public/ ./public/
+COPY lib/ ./lib/                # server.mjs が import している(/docs の生成)
+COPY README.md ./               # /docs が実行時に読む
 ENV PORT=3000
 EXPOSE 3000
 CMD ["node", "server.mjs"]
