@@ -1,0 +1,67 @@
+{
+    "figures": [
+        {
+            "box": [
+                0,
+                0,
+                232,
+                299
+            ],
+            "direction": "horizontal",
+            "order": 0,
+            "paragraphs": [
+                {
+                    "box": [
+                        127,
+                        58,
+                        149,
+                        90
+                    ],
+                    "contents": "6",
+                    "direction": "horizontal",
+                    "order": 0,
+                    "role": null
+                }
+            ]
+        },
+        {
+            "box": [
+                313,
+                148,
+                532,
+                273
+            ],
+            "direction": "horizontal",
+            "order": 1,
+            "paragraphs": []
+        }
+    ],
+    "paragraphs": [],
+    "tables": [],
+    "words": [
+        {
+            "content": "6",
+            "det_score": 0.44564518682269183,
+            "direction": "horizontal",
+            "points": [
+                [
+                    128,
+                    58
+                ],
+                [
+                    149,
+                    59
+                ],
+                [
+                    147,
+                    90
+                ],
+                [
+                    127,
+                    89
+                ]
+            ],
+            "rec_score": 0.45237550139427185
+        }
+    ]
+}

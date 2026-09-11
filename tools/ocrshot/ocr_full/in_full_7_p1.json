@@ -1,0 +1,152 @@
+{
+    "figures": [
+        {
+            "box": [
+                0,
+                1,
+                530,
+                300
+            ],
+            "direction": "horizontal",
+            "order": 0,
+            "paragraphs": [
+                {
+                    "box": [
+                        5,
+                        2,
+                        163,
+                        30
+                    ],
+                    "contents": "ある日の日曜日",
+                    "direction": "horizontal",
+                    "order": 0,
+                    "role": "section_headings"
+                },
+                {
+                    "box": [
+                        112,
+                        67,
+                        308,
+                        89
+                    ],
+                    "contents": "ヒカキン(弟)は歳)遊んでる)",
+                    "direction": "horizontal",
+                    "order": 1,
+                    "role": "section_headings"
+                },
+                {
+                    "box": [
+                        231,
+                        45,
+                        483,
+                        68
+                    ],
+                    "contents": "セイキン\n(2)",
+                    "direction": "horizontal",
+                    "order": 2,
+                    "role": "section_headings"
+                }
+            ]
+        }
+    ],
+    "paragraphs": [],
+    "tables": [],
+    "words": [
+        {
+            "content": "ヒカキン(弟)は歳)遊んでる)",
+            "det_score": 0.8884612597381398,
+            "direction": "horizontal",
+            "points": [
+                [
+                    114,
+                    68
+                ],
+                [
+                    306,
+                    68
+                ],
+                [
+                    306,
+                    87
+                ],
+                [
+                    114,
+                    87
+                ]
+            ],
+            "rec_score": 0.4860960841178894
+        },
+        {
+            "content": "(2)",
+            "det_score": 0.434977961766899,
+            "direction": "horizontal",
+            "points": [
+                [
+                    302,
+                    50
+                ],
+                [
+                    336,
+                    48
+                ],
+                [
+                    337,
+                    62
+                ],
+                [
+                    303,
+                    65
+                ]
+            ],
+            "rec_score": 0.23177999258041382
+        },
+        {
+            "content": "セイキン",
+            "det_score": 0.5471057179030622,
+            "direction": "horizontal",
+            "points": [
+                [
+                    233,
+                    48
+                ],
+                [
+                    299,
+                    48
+                ],
+                [
+                    299,
+                    64
+                ],
+                [
+                    233,
+                    64
+                ]
+            ],
+            "rec_score": 0.9681012630462646
+        },
+        {
+            "content": "ある日の日曜日",
+            "det_score": 0.9016691436132881,
+            "direction": "horizontal",
+            "points": [
+                [
+                    6,
+                    4
+                ],
+                [
+                    161,
+                    4
+                ],
+                [
+                    161,
+                    28
+                ],
+                [
+                    6,
+                    28
+                ]
+            ],
+            "rec_score": 0.9957801103591919
+        }
+    ]
+}

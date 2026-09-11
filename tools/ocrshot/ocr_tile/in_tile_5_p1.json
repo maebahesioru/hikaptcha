@@ -1,0 +1,92 @@
+{
+    "figures": [
+        {
+            "box": [
+                180,
+                0,
+                299,
+                165
+            ],
+            "direction": "horizontal",
+            "order": 0,
+            "paragraphs": [
+                {
+                    "box": [
+                        251,
+                        35,
+                        268,
+                        41
+                    ],
+                    "contents": "KINER",
+                    "direction": "horizontal",
+                    "order": 0,
+                    "role": null
+                },
+                {
+                    "box": [
+                        205,
+                        144,
+                        273,
+                        155
+                    ],
+                    "contents": "コー",
+                    "direction": "horizontal",
+                    "order": 1,
+                    "role": null
+                }
+            ]
+        }
+    ],
+    "paragraphs": [],
+    "tables": [],
+    "words": [
+        {
+            "content": "コー",
+            "det_score": 0.41696081853909017,
+            "direction": "horizontal",
+            "points": [
+                [
+                    207,
+                    145
+                ],
+                [
+                    218,
+                    149
+                ],
+                [
+                    216,
+                    156
+                ],
+                [
+                    205,
+                    152
+                ]
+            ],
+            "rec_score": 0.48780834674835205
+        },
+        {
+            "content": "KINER",
+            "det_score": 0.4997877872321537,
+            "direction": "horizontal",
+            "points": [
+                [
+                    251,
+                    35
+                ],
+                [
+                    271,
+                    35
+                ],
+                [
+                    271,
+                    41
+                ],
+                [
+                    251,
+                    41
+                ]
+            ],
+            "rec_score": 0.3873310685157776
+        }
+    ]
+}

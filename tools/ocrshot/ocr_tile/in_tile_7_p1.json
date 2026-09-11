@@ -1,0 +1,92 @@
+{
+    "figures": [
+        {
+            "box": [
+                0,
+                0,
+                300,
+                169
+            ],
+            "direction": "horizontal",
+            "order": 0,
+            "paragraphs": [
+                {
+                    "box": [
+                        2,
+                        1,
+                        91,
+                        17
+                    ],
+                    "contents": "ある日の日曜日",
+                    "direction": "horizontal",
+                    "order": 0,
+                    "role": "section_headings"
+                },
+                {
+                    "box": [
+                        63,
+                        39,
+                        173,
+                        50
+                    ],
+                    "contents": "ンスキン製作機能力",
+                    "direction": "horizontal",
+                    "order": 1,
+                    "role": null
+                }
+            ]
+        }
+    ],
+    "paragraphs": [],
+    "tables": [],
+    "words": [
+        {
+            "content": "ンスキン製作機能力",
+            "det_score": 0.7658984944570943,
+            "direction": "horizontal",
+            "points": [
+                [
+                    64,
+                    38
+                ],
+                [
+                    153,
+                    39
+                ],
+                [
+                    153,
+                    50
+                ],
+                [
+                    64,
+                    49
+                ]
+            ],
+            "rec_score": 0.00013698855764232576
+        },
+        {
+            "content": "ある日の日曜日",
+            "det_score": 0.8012569900723022,
+            "direction": "horizontal",
+            "points": [
+                [
+                    3,
+                    3
+                ],
+                [
+                    91,
+                    3
+                ],
+                [
+                    91,
+                    16
+                ],
+                [
+                    3,
+                    16
+                ]
+            ],
+            "rec_score": 0.9788129925727844
+        }
+    ]
+}

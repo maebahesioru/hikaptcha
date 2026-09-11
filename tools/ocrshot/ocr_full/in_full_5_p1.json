@@ -1,0 +1,129 @@
+{
+    "figures": [
+        {
+            "box": [
+                314,
+                0,
+                532,
+                295
+            ],
+            "direction": "horizontal",
+            "order": 0,
+            "paragraphs": [
+                {
+                    "box": [
+                        446,
+                        62,
+                        517,
+                        73
+                    ],
+                    "contents": "KINENAY SHRO",
+                    "direction": "horizontal",
+                    "order": 0,
+                    "role": null
+                },
+                {
+                    "box": [
+                        365,
+                        255,
+                        485,
+                        276
+                    ],
+                    "contents": "コイキング/Lv.5",
+                    "direction": "horizontal",
+                    "order": 1,
+                    "role": null
+                }
+            ]
+        }
+    ],
+    "paragraphs": [
+        {
+            "box": [
+                83,
+                258,
+                127,
+                278
+            ],
+            "contents": "サトシ",
+            "direction": "horizontal",
+            "order": 1,
+            "role": null
+        }
+    ],
+    "tables": [],
+    "words": [
+        {
+            "content": "サトシ",
+            "det_score": 0.8148245047648488,
+            "direction": "horizontal",
+            "points": [
+                [
+                    83,
+                    258
+                ],
+                [
+                    127,
+                    258
+                ],
+                [
+                    127,
+                    278
+                ],
+                [
+                    83,
+                    278
+                ]
+            ],
+            "rec_score": 0.9995995759963989
+        },
+        {
+            "content": "コイキング/Lv.5",
+            "det_score": 0.6207419304763018,
+            "direction": "horizontal",
+            "points": [
+                [
+                    364,
+                    255
+                ],
+                [
+                    487,
+                    255
+                ],
+                [
+                    487,
+                    276
+                ],
+                [
+                    364,
+                    276
+                ]
+            ],
+            "rec_score": 0.9839637875556946
+        },
+        {
+            "content": "KINENAY SHRO",
+            "det_score": 0.8214982835860474,
+            "direction": "horizontal",
+            "points": [
+                [
+                    446,
+                    62
+                ],
+                [
+                    518,
+                    62
+                ],
+                [
+                    518,
+                    73
+                ],
+                [
+                    446,
+                    73
+                ]
+            ],
+            "rec_score": 0.001575099304318428
+        }
+    ]
+}
