@@ -93,11 +93,11 @@ const tickets = new Map(); // ticket -> {ip, exp}
 
 // ---------- hikabooru API ----------
 
-async function hkFetch(p) {
+async function hkFetch(p, timeoutMs = 8000) {
   try {
     const res = await fetch(HIKABOORU_API + p, {
       headers: { "user-agent": "hikamani-captcha/1.0" },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
       cache: "no-store",
     });
     if (!res.ok) return null;
@@ -402,6 +402,76 @@ function relatedTag(a, b) {
   return false;
 }
 
+// ---------- 共起タグによる「その画像にTが写っていそうか」の推定 ----------
+// AIタガーは個々の画像で誤る(誤付与・誤漏れ)。タグそのものは信用できないが、
+// 「Tが付いた画像群に共通して現れる珍しいタグ(=Tらしい文脈)」はサイト全体の統計として使える。
+// 実測(眼鏡・visionで検証):
+//   ・Tなしでも共起スコアが高い画像 6枚中5枚に実際に眼鏡が写っていた(=誤漏れの検出)
+//   ・Tありでも共起スコア0の画像 6枚中4枚には眼鏡が写っていなかった(=誤付与の検出)
+// 方式(ランダムバッチ+除外フィルタ)は変えず、除外の判断材料を1つ増やすだけ。
+const COMPANION_TTL_MS = 10 * 60 * 1000;
+const COMPANION_LIMIT = Number(process.env.COMPANION_LIMIT || 60); // 共起を測るために取るT付き画像の枚数
+const COMPANION_TIMEOUT_MS = Number(process.env.COMPANION_TIMEOUT_MS || 1500); // 間に合わなければフィルタ無しで出題
+const COMPANION_RETRY_MS = 60 * 1000; // 取得に失敗したタグを再挑戦するまで
+const COMPANION_MIN_RATIO = 0.3; // T付き画像の何割に現れれば「共起」とみなすか
+const COMPANION_MIN_IDF = 0.5; // これ未満は汎用すぎて使わない
+const COMPANION_THRESHOLD = 0.45; // T付き画像の中央値に対してこの割合以上なら「写っていそう」
+const SITE_POSTS = Number(process.env.SITE_POSTS || 56000); // IDFの分母(サイト全体の枚数)
+const companionCache = new Map(); // tag -> {comps, idfSum, ref, at}
+
+function compScore(tagNames, comps, idfSum) {
+  if (!comps || !idfSum) return 0;
+  let sum = 0;
+  for (const t of tagNames) {
+    const w = comps.get(t);
+    if (w) sum += w;
+  }
+  return sum / idfSum;
+}
+
+async function getCompanions(tag) {
+  const hit = companionCache.get(tag);
+  if (hit && Date.now() - hit.at < COMPANION_TTL_MS) return hit;
+  let out = { comps: null, idfSum: 0, ref: 0, at: Date.now() };
+  // ⚠️ 共起タグの取得が遅いと出題そのものが遅くなる。上限を切って、間に合わなければ
+  //    「フィルタ無し」で先に進む(品質より可用性を落とさない)。失敗は短時間だけ記憶する。
+  const res = await hkFetch(`/posts?query=${encodeURIComponent(tag)}&limit=${COMPANION_LIMIT}&fields=id,tags`, COMPANION_TIMEOUT_MS);
+  if (!res) {
+    const fail = { comps: null, idfSum: 0, ref: 0, at: Date.now() - COMPANION_TTL_MS + COMPANION_RETRY_MS };
+    companionCache.set(tag, fail);
+    return fail;
+  }
+  const posts = (res && res.results) || [];
+  if (posts.length >= 20) {
+    const freq = new Map();
+    const usagesOf = new Map();
+    for (const p of posts) {
+      for (const t of p.tags || []) {
+        const n = t.names[0];
+        freq.set(n, (freq.get(n) || 0) + 1);
+        usagesOf.set(n, t.usages);
+      }
+    }
+    const comps = new Map();
+    let idfSum = 0;
+    for (const [n, c] of freq) {
+      if (n === tag) continue;
+      if (c / posts.length < COMPANION_MIN_RATIO) continue;
+      const idf = Math.max(0, Math.log(SITE_POSTS / Math.max(1, usagesOf.get(n) || 1)));
+      if (idf <= COMPANION_MIN_IDF) continue;
+      comps.set(n, idf);
+      idfSum += idf;
+    }
+    if (idfSum > 0 && comps.size >= 3) {
+      const scores = posts.map((p) => compScore((p.tags || []).map((t) => t.names[0]), comps, idfSum)).sort((a, b) => a - b);
+      out = { comps, idfSum, ref: scores[Math.floor(scores.length / 2)] || 0, at: Date.now() };
+    }
+  }
+  if (companionCache.size > 400) companionCache.clear();
+  companionCache.set(tag, out);
+  return out;
+}
+
 function questionableTag(t, usages) {
   if (!usableTag(t)) return false;
   const n = Number(usages) || 0;
@@ -463,7 +533,7 @@ const prefetched = new Map();
 const stats = {
   challenges: 0, tagRejects: 0, visRejects: 0, relaxedUsed: 0, visChecked: 0, lastVis: [], modes: {},
   // 出題生成の失敗理由(チューニング用。attempts=試行回数の合計)
-  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0, relatedExcluded: 0, relatedPromoted: 0,
+  attempts: 0, fShortBatch: 0, fNoPair: 0, fNoTag: 0, fNotpickShape: 0, fNotShape: 0, fNoTarget: 0, fNeeds: 0, fPool: 0, dupRejects: 0, relatedExcluded: 0, relatedPromoted: 0, compChecked: 0, compDropped: 0, compRanked: 0, compSkipped: 0,
 };
 const IMG_TTL_MS = CHALLENGE_TTL_MS + 120 * 1000;
 const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
@@ -1085,22 +1155,55 @@ async function makeChallenge() {
       const related = new Set();
       for (const [tag] of byTag) if (relatedTag(pick.tag, tag)) related.add(tag);
       const isAmbiguous = (idx) => [...batch[idx].tags].some((t) => related.has(t));
-      const absentSafe = related.size ? absent.filter((idx) => !isAmbiguous(idx)) : absent;
+
+      // --- 共起タグによる「写っていそう」の推定(タグの誤りを統計で補正する) ---
+      // AIタガーの誤りで一番困るのは「人間には写って見えるのに正解に入っていない画像(誤漏れ)」。
+      // タグが無くても、そのタグの画像群に共通して現れる珍しいタグを持っていれば
+      // 「実は写っている」可能性が高い(実測: 該当画像6枚中5枚に実際に写っていた)。
+      const comp = await getCompanions(pick.tag);
+      const likelyHas = new Set();
+      if (comp.comps) {
+        const thr = comp.ref * COMPANION_THRESHOLD;
+        for (let idx = 0; idx < batch.length; idx++) {
+          if (compScore(batch[idx].tags, comp.comps, comp.idfSum) >= thr) likelyHas.add(idx);
+        }
+        stats.compChecked = (stats.compChecked || 0) + 1;
+      } else {
+        stats.compSkipped = (stats.compSkipped || 0) + 1;
+      }
+      // 共起スコアを「閾値」ではなく「順位」として使う:
+      // ダミーはスコアの低い側から、正解は高い側から選ぶ。閾値で切るより頑健
+      // (実測: スコア上位のタグ無し画像6枚中5枚に実際に写っていた/スコア0の画像は写っていない)
+      const scoreOf = (idx) => (comp.comps ? compScore(batch[idx].tags, comp.comps, comp.idfSum) : 0);
+      const preferByScore = (idxs, n, desc) => {
+        if (!comp.comps || idxs.length <= n) return idxs;
+        const sorted = idxs.slice().sort((a, b) => (desc ? scoreOf(b) - scoreOf(a) : scoreOf(a) - scoreOf(b)));
+        return sorted.slice(0, Math.max(n, Math.min(sorted.length, n * 3))); // 上位3倍から多様性で選ぶ余地を残す
+      };
+
+      // 誤漏れ側: 関連タグ持ち or 共起スコアが高い「タグ無し画像」は人間には写って見える
+      const looksLikeT = (idx) => (related.size && isAmbiguous(idx)) || likelyHas.has(idx);
+      const absentSafe = absent.filter((idx) => !looksLikeT(idx));
       if (absentSafe.length < absent.length) stats.relatedExcluded += absent.length - absentSafe.length;
       const usable = absentSafe;
       if (wantsAbsent) {
         // 正解 = タグを持たない画像(グリッド内で「持たない」のは正解だけ) / ダミー = タグを持つ画像
+        // ⚠️ ダミー(=「◯◯が写っている」側)もタグが信用できない。誤付与された画像をダミーに置くと、
+        //    人間は「写っていない」と判断して選ばないので不正解になる(共起スコアで選別する)
+        // ⚠️ ここは「削除」ではなく「並べ替え」に留める。ダミーはグリッドの大半を埋めるので、
+        //    削ると出題そのものが作れなくなる(実測: notpick が fPool で全滅した)
+        const decoyPool = [...tagSet];
         if (mode === "notpick") {
           const N = Math.max(1, Math.min(2, GRID_SIZE - tagSet.size));
           if (usable.length < N || tagSet.size < GRID_SIZE - N) { stats.fNotpickShape++; continue; }
-          targetIdxs = pickBySrcDiversity(usable, N, srcOf);
-          distractorPool = shuffle([...tagSet]).slice(0, GRID_SIZE - N);
+          targetIdxs = pickBySrcDiversity(preferByScore(usable, N, false), N, srcOf);
+          distractorPool = shuffle(preferByScore(decoyPool, GRID_SIZE - N, true)).slice(0, GRID_SIZE - N);
           askN = N;
         } else {
           const k = Math.max(1, Math.min(tagSet.size, 1 + Math.floor(Math.random() * 3)));
           if (usable.length < GRID_SIZE - k) { stats.fNotShape++; continue; }
-          targetIdxs = pickBySrcDiversity(usable, GRID_SIZE - k, srcOf);
-          distractorPool = shuffle([...tagSet]).slice(0, k);
+          targetIdxs = pickBySrcDiversity(preferByScore(usable, GRID_SIZE - k, false), GRID_SIZE - k, srcOf);
+          distractorPool = shuffle(preferByScore(decoyPool, k, true)).slice(0, k);
         }
       } else {
         // 正解 = タグを持つ画像 + 関連タグを持つ画像から必要枚数だけグリッドに入れる
@@ -1108,12 +1211,27 @@ async function makeChallenge() {
         //    人間には「シャツが写っている」と見えるので**正解側に入れる**のが正しい。
         //    ダミー側に置くと「選べば不正解」になり、これが誤漏れによる不公平の主因だった。
         //    除外だけでは「正解が減る」だけで、人間が見て選ぶ画像が答えから漏れたままになる。
-        const relatedImgs = absent.filter((idx) => related.size && isAmbiguous(idx));
+        const relatedImgs = absent.filter(looksLikeT);
         if (relatedImgs.length) stats.relatedPromoted = (stats.relatedPromoted || 0) + relatedImgs.length;
-        const targetPool = [...tagSet, ...relatedImgs];
+        // 誤付与側: タグが付いていても共起スコアが極端に低い画像は、タグが間違っている可能性が高い
+        // (実測: 共起スコア0の「眼鏡」付き画像6枚中4枚には眼鏡が写っていなかった)
+        // ⚠️ 削除は「スコア0(=そのタグの文脈がまったく無い)」に限定し、正解が2枚以上残る時だけ。
+        //    実測(眼鏡): スコア0のタグ付き画像6枚中4枚には写っていなかった
+        let tagSetUsed = [...tagSet];
+        if (comp.comps && comp.ref > 0) {
+          const noCtx = tagSetUsed.filter((idx) => scoreOf(idx) <= 0);
+          const kept = tagSetUsed.filter((idx) => scoreOf(idx) > 0);
+          if (noCtx.length && kept.length >= 2) {
+            stats.compDropped = (stats.compDropped || 0) + noCtx.length;
+            tagSetUsed = kept;
+          }
+        }
+        const targetPool = [...tagSetUsed, ...relatedImgs];
         const want = mode === "pick" ? pickN : Math.min(targetMax, targetPool.length);
-        targetIdxs = pickBySrcDiversity(targetPool, Math.min(want, targetPool.length), srcOf);
-        distractorPool = shuffle(usable); // 関連タグ持ちはダミーに使わない
+        targetIdxs = pickBySrcDiversity(preferByScore(targetPool, want, true), Math.min(want, targetPool.length), srcOf);
+        // ダミーは「写っていない確度が高い」= 共起スコアの低い画像から選ぶ(誤漏れ対策の本命)
+        distractorPool = shuffle(preferByScore(usable, GRID_SIZE, false));
+        if (comp.comps) stats.compRanked = (stats.compRanked || 0) + 1;
         askN = mode === "pick" ? targetIdxs.length : 0;
       }
     }

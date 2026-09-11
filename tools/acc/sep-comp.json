@@ -1,0 +1,134 @@
+[
+ {
+  "n": 0,
+  "prompt": "「赤いネクタイ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 29.3,
+  "inter": 33.1,
+  "sep": 1.13,
+  "nearest": 28,
+  "minDT": 28
+ },
+ {
+  "n": 1,
+  "prompt": "「カウチ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.8,
+  "inter": 36.1,
+  "sep": 1.14,
+  "nearest": 29,
+  "minDT": 29
+ },
+ {
+  "n": 2,
+  "prompt": "「タオル」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 32.3,
+  "sep": 32.25,
+  "nearest": 32.3,
+  "minDT": 19
+ },
+ {
+  "n": 3,
+  "prompt": "「黒髪」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 29,
+  "inter": 33.1,
+  "sep": 1.14,
+  "nearest": 26.6,
+  "minDT": 20
+ },
+ {
+  "n": 4,
+  "prompt": "「イヤホン」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 24.9,
+  "sep": 24.88,
+  "nearest": 24.9,
+  "minDT": 10
+ },
+ {
+  "n": 5,
+  "prompt": "「フェリッド」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 23,
+  "inter": 27.2,
+  "sep": 1.18,
+  "nearest": 24.3,
+  "minDT": 17
+ },
+ {
+  "n": 6,
+  "prompt": "「ヘルメット」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 4,
+  "intra": 27,
+  "inter": 32.6,
+  "sep": 1.21,
+  "nearest": 27.2,
+  "minDT": 16
+ },
+ {
+  "n": 7,
+  "prompt": "「礼服」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 33,
+  "inter": 29.2,
+  "sep": 0.89,
+  "nearest": 27,
+  "minDT": 21
+ },
+ {
+  "n": 8,
+  "prompt": "「仮面ライダー」が写っている画像を2枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 2,
+  "intra": 31,
+  "inter": 31.4,
+  "sep": 1.01,
+  "nearest": 26.1,
+  "minDT": 20
+ },
+ {
+  "n": 9,
+  "prompt": "「ヘッドバンド」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 31.6,
+  "sep": 31.63,
+  "nearest": 31.6,
+  "minDT": 20
+ },
+ {
+  "n": 10,
+  "prompt": "「タンクトップ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31,
+  "inter": 34.4,
+  "sep": 1.11,
+  "nearest": 26,
+  "minDT": 26
+ },
+ {
+  "n": 11,
+  "prompt": "「青いシャツ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 29,
+  "inter": 32.1,
+  "sep": 1.11,
+  "nearest": 28,
+  "minDT": 28
+ }
+]

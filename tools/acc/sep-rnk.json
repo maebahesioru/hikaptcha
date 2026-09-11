@@ -1,0 +1,134 @@
+[
+ {
+  "n": 0,
+  "prompt": "「タオル」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.1,
+  "inter": 28.5,
+  "sep": 0.92,
+  "nearest": 23,
+  "minDT": 23
+ },
+ {
+  "n": 1,
+  "prompt": "「黒い帽子」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 35,
+  "inter": 35.9,
+  "sep": 1.03,
+  "nearest": 32.6,
+  "minDT": 28
+ },
+ {
+  "n": 2,
+  "prompt": "「礼服」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 3,
+  "intra": 18.7,
+  "inter": 33.1,
+  "sep": 1.77,
+  "nearest": 29.2,
+  "minDT": 14
+ },
+ {
+  "n": 3,
+  "prompt": "「ペンダント」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 35,
+  "inter": 30.9,
+  "sep": 0.88,
+  "nearest": 27.6,
+  "minDT": 23
+ },
+ {
+  "n": 4,
+  "prompt": "「バーガー」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 27,
+  "inter": 33.1,
+  "sep": 1.22,
+  "nearest": 29.7,
+  "minDT": 19
+ },
+ {
+  "n": 5,
+  "prompt": "「クラウン」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.1,
+  "inter": 31.1,
+  "sep": 1,
+  "nearest": 24,
+  "minDT": 24
+ },
+ {
+  "n": 6,
+  "prompt": "「礼服」または「道路標識」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 2,
+  "intra": 20,
+  "inter": 37.6,
+  "sep": 1.88,
+  "nearest": 35.6,
+  "minDT": 31
+ },
+ {
+  "n": 7,
+  "prompt": "「ケーキ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.9,
+  "inter": 30.9,
+  "sep": 0.97,
+  "nearest": 24,
+  "minDT": 24
+ },
+ {
+  "n": 8,
+  "prompt": "「黒髪」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 32.9,
+  "inter": 30.8,
+  "sep": 0.93,
+  "nearest": 24,
+  "minDT": 24
+ },
+ {
+  "n": 9,
+  "prompt": "「ブーツ」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 5,
+  "intra": 11.4,
+  "inter": 27.4,
+  "sep": 2.4,
+  "nearest": 25.3,
+  "minDT": 13
+ },
+ {
+  "n": 10,
+  "prompt": "「礼服」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 30.6,
+  "sep": 30.63,
+  "nearest": 30.6,
+  "minDT": 20
+ },
+ {
+  "n": 11,
+  "prompt": "「スープ」または「ブラックパーカー」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 4,
+  "intra": 33.8,
+  "inter": 32.8,
+  "sep": 0.97,
+  "nearest": 25.2,
+  "minDT": 13
+ }
+]
