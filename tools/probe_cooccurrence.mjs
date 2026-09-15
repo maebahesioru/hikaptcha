@@ -14,7 +14,7 @@ const BASE = "https://hikabooru.hikamers.app";
 const TAG = argv[2] || "カーディガン";
 const MIN_FREQ = Number(argv[3] || 0.4);
 
-const UA = { "user-agent": "HikamaniCaptchaProbe/1.0 (research)" };
+const UA = { "user-agent": "HikaptchaProbe/1.0 (research)" };
 const enc = encodeURIComponent;
 
 async function api(path) {

@@ -14,7 +14,7 @@ const BASE = "https://hikabooru.hikamers.app";
 const TAG = process.argv[2] || "眼鏡";
 const N = Number(process.argv[3] || 6);
 const OUT = `C:/Users/maeba/Desktop/hikamani-captcha/tools/comp-${Date.now()}`;
-const UA = { "user-agent": "HikamaniCaptchaProbe/1.0 (research)" };
+const UA = { "user-agent": "HikaptchaProbe/1.0 (research)" };
 const enc = encodeURIComponent;
 const N_SITE = 56000;
 

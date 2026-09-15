@@ -1,4 +1,4 @@
-// ヒカマニCAPTCHA 突破ボット(検証用)
+// HIKAPTCHA 突破ボット(検証用)
 // 人力ゼロ・画像も見ない。公開APIのタグ情報だけで機械的に解く。
 const CAPTCHA = "http://localhost:3107";
 const BOORU = "https://hikabooru.hikamers.app/api";

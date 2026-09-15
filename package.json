@@ -1,9 +1,9 @@
 {
-  "name": "hikamani-captcha",
+  "name": "hikaptcha",
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "hikabooruの画像で出題する多層認証CAPTCHA(画像認証+メモリハードPoW+サーバー観測シグナル+画像改変)",
+  "description": "HIKAPTCHA — hikabooruの画像で出題する多層認証CAPTCHA(画像認証+メモリハードPoW+ハニーポット+挙動シグナル+チケット束縛+画像改変)",
   "scripts": {
     "start": "node server.mjs",
     "test": "node tools/test_multilayer.mjs",

@@ -58,7 +58,7 @@
     var API = "http://localhost:3108";
     window.__solved = null;
 
-    HikamaniCaptcha.render(document.getElementById("captcha"), {
+    Hikaptcha.render(document.getElementById("captcha"), {
       apiBase: API,
       onSolved: function (token, ticket) {
         document.getElementById("token").textContent = token || "(空)";

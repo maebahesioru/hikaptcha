@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>ヒカマニCAPTCHA</title>
+<title>HIKAPTCHA</title>
 <style>
   body { margin: 0; background: #0c0c0e; color: #e4e4e7; font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
   .wrap { max-width: 560px; margin: 40px auto; padding: 0 16px; }
@@ -32,7 +32,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🤖 ヒカマニCAPTCHA <a href="/docs" style="font-size:12px;font-weight:400;vertical-align:middle">docs</a></h1>
+  <h1>🤖 HIKAPTCHA <a href="/docs" style="font-size:12px;font-weight:400;vertical-align:middle">docs</a></h1>
   <p class="sub">
     hikabooru(<a href="https://hikabooru.hikamers.app" target="_blank" rel="noopener">hikabooru.hikamers.app</a>)の実在画像で出題する多層認証CAPTCHA。<br>
     出題は6種類: 「◯◯の画像を全部選べ」/「◯◯が写っている画像を◯枚だけ選べ」/「◯◯が写っていない画像を全部選べ」/「◯◯が写っていない画像を◯枚だけ選べ」/「◯◯または△△が写っている画像を全部選べ」/「◯◯と△△の両方が写っている画像を全部選べ」。<br>
@@ -98,7 +98,7 @@
     showRes("ロボット確認OK(全層通過)。トークンを消費して登録ゲートの動作をテストできます", true);
   }
 
-  HikamaniCaptcha.render($("captcha"), { onSolved: onSolved });
+  Hikaptcha.render($("captcha"), { onSolved: onSolved });
 
   consumeBtn.addEventListener("click", function () {
     if (!currentToken) return;
@@ -133,7 +133,7 @@
     resEl.textContent = "";
     const host = $("captcha");
     host.textContent = "";
-    HikamaniCaptcha.render(host, { onSolved: onSolved });
+    Hikaptcha.render(host, { onSolved: onSolved });
   });
 </script>
 </body>

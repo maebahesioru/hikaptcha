@@ -1,4 +1,4 @@
-// ヒカマニCAPTCHA 単体サーバー
+// HIKAPTCHA 単体サーバー
 // hikabooru(https://hikabooru.hikamers.app)の実在タグ付き画像を使った
 // 「◯◯の画像を全部選んで」式の画像選択CAPTCHA。
 //
@@ -10,7 +10,7 @@
 //   <div id="hmc-captcha"></div>
 //   <script src="https://<このサーバー>/captcha.js"></script>
 //   <script>
-//     HikamaniCaptcha.render(document.getElementById("hmc-captcha"), {
+//     Hikaptcha.render(document.getElementById("hmc-captcha"), {
 //       onSolved: (token) => { /* 登録ボタン等を有効化 */ },
 //     });
 //   </script>
@@ -2042,7 +2042,7 @@ if (process.env.TAG_AUDIT === "1") {
 }
 
 server.listen(PORT, () => {
-  console.log(`ヒカマニCAPTCHA ready on http://localhost:${PORT} (hikabooru: ${HIKABOORU_BASE})`);
+  console.log(`HIKAPTCHA ready on http://localhost:${PORT} (hikabooru: ${HIKABOORU_BASE})`);
   console.log(`  多層認証: 画像 + PoW(${POW_BITS}bit〜${POW_BITS_MAX}bit) + ハニーポット + 挙動判定 + チケット束縛`);
   // 自己診断: SELFTEST=1 で出題生成を1回だけ試して結果を出し、終了する
   // (本番を起動せずに出題ロジックの異常を検知できる)

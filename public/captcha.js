@@ -1,9 +1,9 @@
-// ヒカマニCAPTCHA ウィジェット(多層認証版)
+// HIKAPTCHA ウィジェット(多層認証版)
 // 使い方(埋め込み先サイト):
 //   <div id="captcha"></div>
 //   <script src="https://CAPTCHAサーバー/captcha.js"></script>
 //   <script>
-//     HikamaniCaptcha.render(document.getElementById("captcha"), {
+//     Hikaptcha.render(document.getElementById("captcha"), {
 //       apiBase: "https://CAPTCHAサーバー",
 //       onSolved: function (token, ticket) { ... },
 //     });
@@ -274,7 +274,7 @@
 
     function draw() {
       box.textContent = "";
-      box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
+      box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(HIKAPTCHA)"));
       if (ch && (ch.ask || ch.prompt) && !busy) {
         const text = (ch.ask && ch.ask.text) || ch.prompt;
         const p = el("p", "hkc-prompt");
@@ -420,7 +420,7 @@
       var left = Math.max(1, Math.floor(sec));
       var render = function () {
         box.textContent = "";
-        box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(ヒカマニCAPTCHA)"));
+        box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(HIKAPTCHA)"));
         var p = el("p", "hkc-prompt");
         var b = el("b", "all");
         b.textContent = "あと" + left + "秒";
@@ -549,5 +549,6 @@
     load();
   }
 
-  window.HikamaniCaptcha = { render: render };
+  window.Hikaptcha = { render: render };
+  window.HikamaniCaptcha = window.Hikaptcha; // 旧名(互換用)
 })();
