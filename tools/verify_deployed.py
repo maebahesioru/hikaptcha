@@ -1,34 +1,25 @@
-"""デプロイされたCAPTCHAをブラウザで開いて確認する"""
+"""デプロイ後の最終確認(スクショ+画像ロード)"""
 from playwright.sync_api import sync_playwright
-
-URL = "https://hikaptcha.hikamers.app/"
 OUT = "C:/Users/maeba/Desktop/hikamani-captcha/.docs-shots/deployed.png"
-
 with sync_playwright() as p:
     b = p.chromium.launch()
-    pg = b.new_page(viewport={"width": 1280, "height": 1100}, device_scale_factor=1.5)
+    pg = b.new_page(viewport={"width": 1180, "height": 980}, device_scale_factor=1.4)
     errs = []
-    pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
     pg.on("pageerror", lambda e: errs.append(str(e)))
-    pg.goto(URL, wait_until="load")
-    pg.wait_for_timeout(2500)
-    # 影のDOMの中を見る(captcha.jsはShadow DOMで描画する)
+    pg.goto("https://hikaptcha.hikamers.app/", wait_until="load")
+    pg.wait_for_timeout(3000)
     info = pg.evaluate("""() => {
-      const host = document.querySelector('div');
-      const out = {hosts: document.querySelectorAll('*').length};
-      const sh = [...document.querySelectorAll('*')].map(e => e.shadowRoot).filter(Boolean);
-      out.shadowRoots = sh.length;
-      if (sh.length) {
-        const imgs = sh[0].querySelectorAll('img');
-        out.images = imgs.length;
-        out.loaded = [...imgs].filter(i => i.complete && i.naturalWidth > 0).length;
-        const title = sh[0].querySelector('.hkc-title, .title, h3');
-        out.prompt = title ? title.textContent.trim().slice(0, 60) : null;
-      }
-      return out;
+      const sh = [...document.querySelectorAll('*')].map(e => e.shadowRoot).filter(Boolean)[0];
+      if (!sh) return {shadow: false};
+      const imgs = [...sh.querySelectorAll('img')];
+      const texts = [...sh.querySelectorAll('*')].map(e => e.textContent.trim()).filter(t => t && t.length < 80);
+      return {shadow: true, images: imgs.length, loaded: imgs.filter(i => i.complete && i.naturalWidth > 0).length,
+              https: imgs.filter(i => i.src.startsWith('https')).length,
+              prompt: texts.find(t => t.includes('選んでください')) || null,
+              buttons: [...sh.querySelectorAll('button')].map(b => b.textContent.trim()).slice(0,3)};
     }""")
-    print("ページ情報:", info)
-    print("コンソールエラー:", errs[:3] if errs else "なし")
+    print("ページ:", info)
+    print("JSエラー:", errs[:3] if errs else "なし")
     pg.screenshot(path=OUT)
     print("スクショ:", OUT)
     b.close()

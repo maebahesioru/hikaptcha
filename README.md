@@ -25,6 +25,31 @@ MIN_SOLVE_MS=1500 node server.mjs      # サーバー実測の下限
 node tools/api_walkthrough.mjs http://localhost:3108   # 正解付きのデバッグコピー
 ```
 
+## デプロイ(本番)
+
+**公開URL: https://hikaptcha.hikamers.app** (HTTPでアクセスすると自動でHTTPSになる)
+
+```
+GitHub (maebahesioru/hikamani-captcha, master)
+   └─ Coolify (192.168.1.73) が Dockerfile でビルド → コンテナ :3000
+        └─ Traefik → Cloudflare Tunnel (cloudflared) → hikaptcha.hikamers.app
+```
+
+| 項目 | 値 |
+|---|---|
+| ホスト | Coolify `https://coolify.hikamers.app`(アプリ名「ヒカマニCAPTCHA」) |
+| ビルド | Dockerfile(`/Dockerfile`)・ポート 3000 |
+| ドメイン | `http://hikaptcha.hikamers.app`(Coolifyの設定値。HTTPSはCloudflareが終端) |
+| DNS | ワイルドカード `*.hikamers.app` → トンネル でカバー(個別レコード不要) |
+| トンネル | ingress に `hikaptcha.hikamers.app` を追加する必要がある(`tools/deploy_cloudflare.py add`) |
+| 環境変数 | `PUBLIC_BASE=https://hikaptcha.hikamers.app`(画像URLをhttpsで返すため) |
+
+⚠️ **トンネルのingressにホスト名が無いと404になる**(DNSはワイルドカードで通っていても、
+cloudflaredが知らないホストは `http_status:404` を返す)。新しいサブドメインを増やす時は
+`python tools/deploy_cloudflare.py check` で確認 → `add` で登録する。
+
+更新するときは push してから Coolify で Redeploy(またはデプロイAPIを叩く)。
+
 ## 使い方(クイックスタート)
 
 ### 1. CAPTCHAサーバーを立てる

@@ -10,3 +10,4 @@ __pycache__/
 tag_audit/
 *.jpg
 .git-backup*
+.coolify-*.json
