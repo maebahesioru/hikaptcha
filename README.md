@@ -4,7 +4,10 @@ hikabooru([hikabooru.hikamers.app](https://hikabooru.hikamers.app))の**実在�
 「◯◯の画像を全部選んで」の画像認証に、メモリハードPoW・ハニーポット・サーバー観測シグナル・
 チケット束縛・画像改変を重ねる。Node 18+ のみ(ffmpegは任意。無ければ画像改変だけ無効)。
 
-## 起動
+## 起動(自分で立てる場合)
+
+⚠️ **埋め込みたいだけなら起動は不要。** 公開サーバー(`https://hikaptcha.hikamers.app`)をそのまま使える
+(→「使い方(クイックスタート)」)。ここは**改造したい時・セルフホストしたい時**の手順。
 
 ```bash
 node server.mjs                        # http://localhost:3107
@@ -14,8 +17,8 @@ IMG_TRANSFORM=0 node server.mjs        # 画像改変を無効化(ffmpeg不要)
 MIN_SOLVE_MS=1500 node server.mjs      # サーバー実測の下限
 ```
 
-動作確認ページ: `http://localhost:3107/`
-ドキュメントページ: `http://localhost:3107/docs`(このREADME.mdをその場でHTMLにして配信している。
+動作確認ページ: `http://localhost:3107/`(公開: `https://hikaptcha.hikamers.app/`)
+ドキュメントページ: `http://localhost:3107/docs`(公開: `https://hikaptcha.hikamers.app/docs`。このREADME.mdをその場でHTMLにして配信している。
 手書きのdocを別に持つと必ず食い違うので、READMEが唯一の情報源)
 
 `tools/api_walkthrough.mjs` を使うと、**下に書いてある全リクエストを実際に投げて応答を表示する**
@@ -52,20 +55,23 @@ cloudflaredが知らないホストは `http_status:404` を返す)。新しい�
 
 ## 使い方(クイックスタート)
 
-### 1. CAPTCHAサーバーを立てる
+**サーバーは既に1つ動いている。** 各サイトごとに立てる必要はない(reCAPTCHAの `siteverify` と同じ関係)。
+埋め込む側がやることは「ウィジェットを置く」+「tokenを消費する」の2つだけ。
 
-```bash
-node server.mjs          # http://localhost:3107
+```
+あなたのサイト ──(captcha.js)──▶ https://hikaptcha.hikamers.app/api/*  ← このサーバーは1つで全サイト共通
 ```
 
-### 2. サイトに埋め込む(フロント側)
+自分で改造したい・手元で動かしたい場合だけ `node server.mjs` で起動する(→「起動」)。
+
+### 1. サイトに埋め込む(フロント側)
 
 ```html
 <div id="captcha"></div>
-<script src="https://CAPTCHAサーバーのURL/captcha.js"></script>
+<script src="https://hikaptcha.hikamers.app/captcha.js"></script>
 <script>
   HikamaniCaptcha.render(document.getElementById("captcha"), {
-    apiBase: "https://CAPTCHAサーバーのURL",
+    apiBase: "https://hikaptcha.hikamers.app",
     // 解けた瞬間に呼ばれる。この時点ではまだ「未検証」
     onSolved: function (token, ticket) {
       fetch("/register", {
@@ -86,7 +92,7 @@ node server.mjs          # http://localhost:3107
 
 ```js
 // 登録・投稿を受け付ける前に、必ず consume を通す
-const r = await fetch("https://CAPTCHAサーバーのURL/api/consume", {
+const r = await fetch("https://hikaptcha.hikamers.app/api/consume", {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ token, ticket }),
@@ -98,7 +104,7 @@ if (!j.ok) return res.status(400).json({ error: "認証に失敗しました" })
 
 ```bash
 # シェルから確認する場合
-curl -X POST https://CAPTCHAサーバーのURL/api/consume \
+curl -X POST https://hikaptcha.hikamers.app/api/consume \
   -H "content-type: application/json" \
   -d '{"token":"...","ticket":"..."}'
 # => {"ok":true}
@@ -156,7 +162,7 @@ curl -X POST https://CAPTCHAサーバーのURL/api/consume \
 出題を1件作る。パラメータは無し。**本番は正解(`target`)を返さない**(デバッグコピーのみ付く)。
 
 ```bash
-curl -s http://localhost:3107/api/challenge
+curl -s https://hikaptcha.hikamers.app/api/challenge
 ```
 
 実際の応答(デバッグコピーで正解を可視化したもの):
@@ -209,7 +215,7 @@ curl -s http://localhost:3107/api/challenge
 ### POST /api/verify
 
 ```bash
-curl -X POST http://localhost:3107/api/verify -H "content-type: application/json" -d '{
+curl -X POST https://hikaptcha.hikamers.app/api/verify -H "content-type: application/json" -d '{
   "id": "056ae9330ba4f6e6",
   "selected": ["cc8d38f9a970", "61635834b910"],
   "ticket": "75d0ef125e92...",
