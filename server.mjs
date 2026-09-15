@@ -691,9 +691,17 @@ function registerImage(upstreamUrl, challengeId) {
 }
 
 // リクエストのホストから公開ベースURLを作る(埋め込み先が別オリジンでも絶対URLで返す)
+// 画像URLの組み立て。プロキシ配下では x-forwarded-proto を見るが、
+// Cloudflare Tunnel 経由だと付かないことがある(実測: タイルURLがhttpになり、
+// 混在コンテンツ扱いで余計な301が9回発生していた)。PUBLIC_BASE を設定すればそれを使う。
+const PUBLIC_BASE = (process.env.PUBLIC_BASE || "").replace(/\/+$/, "");
+
 function publicBase(req) {
-  const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  if (PUBLIC_BASE) return PUBLIC_BASE;
+  const fwd = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
+  // Cloudflare経由(cf-ray あり)なら https とみなす
+  const proto = fwd || (req.headers["cf-ray"] ? "https" : "http");
   return `${proto}://${host}`;
 }
 
