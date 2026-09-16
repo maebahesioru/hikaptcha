@@ -8,6 +8,7 @@ hikabooru(ヒカマニ関連の画像アーカイブ)の実在画像を使う画
 - 公開サーバー: **https://hikaptcha.hikamers.app**
 - リポジトリ: [maebahesioru/hikaptcha](https://github.com/maebahesioru/hikaptcha)
 - 管理者: [@maebahesioru2](https://x.com/maebahesioru2)(X)
+- 寄付: [hikamers.app/donate](https://hikamers.app/donate)
 
 ## 特徴
 

@@ -614,8 +614,8 @@ function concreteness(usages) {
 // クロップをやめたので、以前のような「3:2付近しか使えない(全体の2.8%)」制約は不要。
 // タイル(3:2)に「contain+ぼかし背景」で収める関係で、極端な縦長・横長は避ける。
 // 範囲を広げるとプールは増えるが、余白が大きくなり被写体が小さく見える。
-const ASPECT_MIN = Number(process.env.ASPECT_MIN || 1.0);
-const ASPECT_MAX = Number(process.env.ASPECT_MAX || 2.2);
+let ASPECT_MIN = Number(process.env.ASPECT_MIN || 1.0);
+let ASPECT_MAX = Number(process.env.ASPECT_MAX || 2.2);
 
 function goodAspect(p) {
   const w = Number(p.canvasWidth) || 0;
@@ -647,6 +647,9 @@ const IMG_MAX = 6000; // 保持する画像の上限(メモリ保護)
 
 // 改変パラメータ(環境変数で調整可)
 const TRANSFORM = process.env.IMG_TRANSFORM !== "0"; // 0で無効化
+// 配信画像の形式。webpは同じ見た目で3割ほど軽い(対応ブラウザは実質全部)
+const IMG_FORMAT = process.env.IMG_FORMAT || "webp";
+const WEBP_Q = Number(process.env.WEBP_Q || 70); // 0-100(高いほど高画質)
 const JPEG_Q = Number(process.env.JPEG_Q || 3); // 再圧縮品質
 const IMG_LONG_EDGE = Number(process.env.IMG_LONG_EDGE || 640); // 長辺のピクセル数
 
@@ -695,7 +698,11 @@ async function transformImage(buf, rotateDeg = 0) {
   filters.push(`eq=gamma=${gamma.toFixed(3)}`);
 
   try {
-    await execFileP("ffmpeg", ["-y", "-loglevel", "error", "-i", inp, "-vf", filters.join(","), "-q:v", String(JPEG_Q), out], { timeout: 8000 });
+    const args = ["-y", "-loglevel", "error", "-i", inp, "-vf", filters.join(",")];
+    if (IMG_FORMAT === "webp") args.push("-c:v", "libwebp", "-quality", String(WEBP_Q), "-f", "webp");
+    else args.push("-q:v", String(JPEG_Q));
+    args.push(out);
+    await execFileP("ffmpeg", args, { timeout: 8000 });
     return readFileSync(out);
   } catch {
     return null;
@@ -778,6 +785,7 @@ async function fetchSlice(offset, limit, level = 0) {
         id: p.id,
         url: absUrl(p.thumbnailUrl),
         tags: new Set(tagU.keys()),
+        ar: (Number(p.canvasWidth) || 0) / (Number(p.canvasHeight) || 1), // 縦横タスク用
         tagU,
         tagCount: tagU.size,
         // 元ネタ(出題の多様性チェック用。表示には使わない)
@@ -851,7 +859,7 @@ const MODE_WEIGHTS = (() => {
   //   notor  … 「どちらも写っていない」は not と同じ形で、実測3件で誤り平均2.0枚(notと同等)
   //   withnot… 「Aが写っていてBが写っていない」は実測2件で完全一致1・誤り平均0.5枚(良好)
   // 重みを変えたい場合は MODE_WEIGHTS を指定する
-  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,rotate=1,and=0";
+  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,rotate=1,portrait=1,and=0";
   const m = new Map();
   for (const part of raw.split(",")) {
     const [k, v] = part.split("=");
@@ -915,6 +923,9 @@ function buildAsk(mode, tags, n) {
       return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」が写っていて「${b}」が写っていない画像を全部選んでください` };
     case "rotate":
       return { mode, tags: [], n: 0, maxSelect: 0, step: 90, text: "画像が正しい向きになるように回してください" };
+    case "portrait":
+      return { mode, tags: [], n: 0, maxSelect: 0, text: "縦長の画像を全部選んでください" };
+
     default:
       return { mode: "single", tags, n: 0, maxSelect: 0, text: `「${a}」の画像を全部選んでください` };
   }
@@ -1165,8 +1176,12 @@ async function makeChallenge(ip = "") {
     const relaxed = level >= 2;
     // 形式を先に決めてからバッチを取る。notpick は「タグがグリッドをほぼ埋める」画像が要るため多めに取る
     const mode = chooseMode();
+    // 縦横タスクは縦長の画像が要るので、この形式のときだけ許容範囲を広げて取りに行く
+    const prevAspect = { min: ASPECT_MIN, max: ASPECT_MAX };
+    if (mode === "portrait") { ASPECT_MIN = 0.45; ASPECT_MAX = 2.6; }
     const firstLimit = mode === "notpick" ? Math.max(60, BATCH_LIMIT) : BATCH_LIMIT;
     let batch = await fetchRandomImageBatch(firstLimit, level);
+    ASPECT_MIN = prevAspect.min; ASPECT_MAX = prevAspect.max;
     stats.attempts++;
     // 実測: フィルタ通過率が低く、30枚取っても9枚に足りないことが多い(空振りの53%)。
     // 足りないときは1回だけ取得枚数を倍にして取り直す(level 0〜1の再利用で往復を減らす)。
@@ -1200,7 +1215,19 @@ async function makeChallenge(ip = "") {
     let rotateApplied = 0; // 回転タスクで実際に回した角度
 
     const PAIR_MODES = new Set(["and", "or", "xor", "notor", "withnot"]);
-    if (mode === "rotate") {
+    if (mode === "portrait") {
+      // 縦横タスク: 配信時のアスペクト比で正解が決まる(人間は一目で分かる)
+      const tall = [], wide = [];
+      for (let i = 0; i < batch.length; i++) {
+        const ar = batch[i].ar || 1;
+        if (ar < 0.95) tall.push(i);
+        else if (ar > 1.35) wide.push(i);
+      }
+      if (tall.length < 2 || wide.length < 3) { stats.fNoTag++; continue; }
+      targetIdxs = shuffle(tall).slice(0, Math.min(5, tall.length));
+      distractorPool = shuffle(wide);
+      promptTags = [];
+    } else if (mode === "rotate") {
       // 回転タスク: 1枚を90/180/270度回した状態で出し、正しい向きに戻させる。
       // 正解は「戻した角度」なので、サーバーが持つ適用角度と突き合わせるだけで検証できる。
       const angle = [90, 180, 270][Math.floor(Math.random() * 3)];
@@ -1344,7 +1371,7 @@ async function makeChallenge(ip = "") {
         if (w > 0) for (let k = 0; k < w; k++) roulette.push({ tag, n, usages: v.usages });
         if (w > 0) stats.wSum = (stats.wSum || 0) + w;
       }
-      if (!roulette.length) { stats.fNoTag++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTag" + " mode=" + mode + "\n"); continue; }
+      if (mode === "count" && !roulette.length) { stats.fNoTag++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTag" + " mode=" + mode + "\n"); continue; }
       // 直近に出したタグ(とその類似タグ)は避ける。避けた結果ゼロなら全体から選ぶ
       // ⚠️ 重みを下げる方式では人気タグが結局勝っていた(実測: 礼服×10)ので、除外に切り替える
       let pick = null;
@@ -1782,7 +1809,7 @@ async function handleApi(req, res, url) {
     // 改変済みがあればそれを使う(1回だけ生成して使い回す)
     if (img.buf) {
       res.writeHead(200, {
-        "content-type": "image/jpeg",
+        "content-type": IMG_FORMAT === "webp" ? "image/webp" : "image/jpeg",
         "cache-control": "private, max-age=300",
         "access-control-allow-origin": "*",
       });
@@ -1796,7 +1823,7 @@ async function handleApi(req, res, url) {
         const body = transformed || pf.buf;
         img.buf = body;
         res.writeHead(200, {
-          "content-type": "image/jpeg",
+          "content-type": IMG_FORMAT === "webp" ? "image/webp" : "image/jpeg",
           "cache-control": "private, max-age=300",
           "access-control-allow-origin": "*",
           "x-hkc-transformed": transformed ? "1" : "0",
@@ -1819,7 +1846,7 @@ async function handleApi(req, res, url) {
       const body = transformed || orig;
       img.buf = body; // キャッシュ(同じ出題中は同じ画像を返す)
       res.writeHead(200, {
-        "content-type": "image/jpeg",
+        "content-type": IMG_FORMAT === "webp" ? "image/webp" : "image/jpeg",
         "cache-control": "private, max-age=300",
         "access-control-allow-origin": "*",
         "x-hkc-transformed": transformed ? "1" : "0",
