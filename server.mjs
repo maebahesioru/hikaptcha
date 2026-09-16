@@ -1644,7 +1644,22 @@ async function readBody(req) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === "/api/health" && req.method === "GET") {
-    return sendJson(res, 200, { ok: true, stats });
+    // 設定値も返す(デプロイ後に環境変数が届いているかを外から確認できるように)
+    return sendJson(res, 200, {
+      ok: true,
+      limits: {
+        ipQuota: IP_QUOTA,
+        ipRefillMs: IP_REFILL_MS,
+        ipQuotaExemptLocal: IP_QUOTA_EXEMPT_LOCAL,
+        powBits: POW_BITS,
+        powBitsMax: POW_BITS_MAX,
+        maxAttempts: MAX_ATTEMPTS,
+        challengeTtlMs: CHALLENGE_TTL_MS,
+        tokenTtlMs: TOKEN_TTL_MS,
+        publicBase: PUBLIC_BASE || null,
+      },
+      stats,
+    });
   }
 
   // 画像配信: hikabooruのサムネイルを中継する
