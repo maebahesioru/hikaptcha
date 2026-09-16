@@ -727,7 +727,10 @@ const MAX_TAGS_PER_IMAGE = Number(process.env.MAX_TAGS_PER_IMAGE || 26);
 
 // 1つのoffsetから「連続した投稿」を取得する(内部用)。バッチ構築は下の fetchRandomImageBatch。
 async function fetchSlice(offset, limit, level = 0) {
-  const q = encodeURIComponent("safety:safe type:image");
+  // 取得する投稿の種別。既定は静止画のみ。
+  // 実測(2026-09): safety:safe の内訳は image 30,544 / video 25,359 / animation 212 で、
+  // 動画のサムネイルも通常のJPEG(実フレーム)なので、含めるとプールが約2倍になる。
+  const q = encodeURIComponent(POOL_QUERY);
   const d = await hkFetch(`/posts?query=${q}&limit=${limit}&offset=${offset}&fields=id,canvasWidth,canvasHeight,thumbnailUrl,tags,source`);
   return (d?.results || [])
     .filter((p) => {
@@ -846,6 +849,9 @@ const TAG_MIN_USAGES = Number(process.env.TAG_MIN_USAGES || 150);
 // 1回に取る画像の枚数。フィルタで落ちる分を見込んで多めに取る
 // (実測: 20枚だと9枚に足りない空振りが多発し、API往復で出題が遅くなっていた)。
 const BATCH_LIMIT = Number(process.env.BATCH_LIMIT || 60);
+// プールにする投稿のクエリ。既定は静止画のみ("safety:safe type:image")。
+// 動画・GIFも使うなら "safety:safe" を指定する。
+const POOL_QUERY = process.env.POOL_QUERY || "safety:safe type:image";
 
 // 1バッチを何個の「離れたoffset」から集めるか。
 // 1にすると連続した塊を引いてしまい、9枚が同じ撮影/同じチャンネルになる(実測で確認)。

@@ -1,0 +1,68 @@
+[
+ {
+  "n": 0,
+  "prompt": "「ライフル」または「自動車」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 2,
+  "intra": 37,
+  "inter": 30.6,
+  "sep": 0.83,
+  "nearest": 27.6,
+  "minDT": 10
+ },
+ {
+  "n": 1,
+  "prompt": "「ビジネススーツ」または「コントローラー」が写っている画像を全部選んでください",
+  "mode": "or",
+  "nTargets": 4,
+  "intra": 23.8,
+  "inter": 35.1,
+  "sep": 1.47,
+  "nearest": 30.2,
+  "minDT": 27
+ },
+ {
+  "n": 2,
+  "prompt": "「黒髪」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 33,
+  "inter": 29.4,
+  "sep": 0.89,
+  "nearest": 26.4,
+  "minDT": 22
+ },
+ {
+  "n": 3,
+  "prompt": "「天井」も「黒ネクタイ」も写っていない画像を全部選んでください",
+  "mode": "notor",
+  "nTargets": 7,
+  "intra": 15.6,
+  "inter": 23.1,
+  "sep": 1.48,
+  "nearest": 18,
+  "minDT": 11
+ },
+ {
+  "n": 4,
+  "prompt": "「茶髪」が写っていて「ケーブル」が写っていない画像を全部選んでください",
+  "mode": "withnot",
+  "nTargets": 2,
+  "intra": 29,
+  "inter": 27.6,
+  "sep": 0.95,
+  "nearest": 22.3,
+  "minDT": 10
+ },
+ {
+  "n": 5,
+  "prompt": "「カウチ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.1,
+  "inter": 29.3,
+  "sep": 0.94,
+  "nearest": 24,
+  "minDT": 24
+ }
+]
