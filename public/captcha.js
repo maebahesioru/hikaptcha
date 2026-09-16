@@ -106,6 +106,57 @@
     .hkc-layer.off { border-color: #7f1d1d; color: #fca5a5; }
     .hkc-progress { height: 3px; background: #27272a; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .hkc-progress i { display: block; height: 100%; width: 0%; background: #eab308; transition: width .2s; }
+
+    /* ---- アニメーション(依存ゼロ・CSSのみ) ---- */
+    @keyframes hkc-in { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+    @keyframes hkc-tile-in { from { opacity: 0; transform: translateY(16px) scale(.9); } to { opacity: 1; transform: none; } }
+    @keyframes hkc-pop { 0% { transform: scale(1); } 45% { transform: scale(1.07); } 100% { transform: scale(1); } }
+    @keyframes hkc-check-in { from { transform: scale(0) rotate(-25deg); opacity: 0; } to { transform: none; opacity: 1; } }
+    @keyframes hkc-ok-pulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.5); } 100% { box-shadow: 0 0 0 24px rgba(34,197,94,0); } }
+    @keyframes hkc-shake {
+      10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(4px); }
+      30%, 50%, 70% { transform: translateX(-7px); } 40%, 60% { transform: translateX(7px); }
+    }
+    @keyframes hkc-stripes { from { background-position: 0 0; } to { background-position: 12px 0; } }
+    @keyframes hkc-breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+    @keyframes hkc-blink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+    .hkc { animation: hkc-in .42s cubic-bezier(.16,.84,.28,1) both; }
+    .hkc-title { animation: hkc-in .5s .04s both; }
+    .hkc-prompt { animation: hkc-in .5s .09s both; }
+    .hkc-grid { animation: hkc-in .34s both; }
+    .hkc-tile {
+      transition: border-color .18s, opacity .18s, transform .2s cubic-bezier(.2,.9,.3,1.2), box-shadow .2s;
+      animation: hkc-tile-in .52s cubic-bezier(.16,.84,.28,1) both;
+      animation-delay: calc(var(--hkc-i, 0) * 45ms + .1s);
+    }
+    /* 同じ出題の再描画(進捗更新など)では入場アニメを再生しない */
+    .hkc-grid.static, .hkc-grid.static .hkc-tile { animation: none; }
+    .hkc-tile:hover { border-color: #a1a1aa; transform: translateY(-3px) scale(1.03); box-shadow: 0 10px 22px rgba(0, 0, 0, .55); }
+    .hkc-tile:active { transform: translateY(-1px) scale(.995); }
+    /* フォーカス枠は「選択」の青と混ざらないよう白の破線で外側に出す */
+    .hkc-tile:focus-visible { outline: 2px dashed #e4e4e7; outline-offset: 2px; }
+    .hkc-tile.sel {
+      border-color: #7dd3fc;
+      box-shadow: 0 0 0 2px rgba(125, 211, 252, .5), 0 0 20px rgba(56, 189, 248, .45);
+      animation: hkc-pop .34s cubic-bezier(.2, 1.7, .4, 1);
+    }
+    .hkc-tile.sel .hkc-check { animation: hkc-check-in .34s cubic-bezier(.2, 1.7, .4, 1) both; }
+    .hkc.done { border-color: #22c55e; animation: hkc-ok-pulse .9s ease-out; }
+    .hkc.shake { animation: hkc-shake .5s cubic-bezier(.36, .07, .19, .97); }
+    .hkc-progress i {
+      background-image: linear-gradient(45deg, rgba(255,255,255,.3) 25%, transparent 25%, transparent 50%,
+                        rgba(255,255,255,.3) 50%, rgba(255,255,255,.3) 75%, transparent 75%);
+      background-size: 12px 12px;
+      animation: hkc-stripes .7s linear infinite;
+    }
+    .hkc-loading { animation: hkc-breathe 1.5s ease-in-out infinite; }
+    .hkc-msg { animation: hkc-in .3s ease-out both; }
+    .hkc-prompt b.count { animation: hkc-blink 1s ease-in-out infinite; }
+    /* 動きを減らす設定の環境では全部止める */
+    @media (prefers-reduced-motion: reduce) {
+      .hkc, .hkc *, .hkc *::before, .hkc *::after { animation: none !important; transition: none !important; }
+    }
   `;
 
   function el(tag, cls, text) {
@@ -221,6 +272,7 @@
     style.textContent = STYLE;
     root.appendChild(style);
     const box = el("div", "hkc");
+    let lastChallengeId = null; // 入場アニメを出題ごとに1回だけにするための記憶
     root.appendChild(box);
 
     let ch = null;
@@ -297,9 +349,13 @@
         box.appendChild(el("div", "hkc-loading", busy ? "確認中..." : "問題を準備中..."));
         return;
       }
-      const grid = el("div", "hkc-grid");
-      ch.tiles.forEach(function (t) {
+      // 出題が変わった時だけ入場アニメを再生する(進捗更新の再描画でチラつかせない)
+      const isNewChallenge = !!(ch.id && ch.id !== lastChallengeId);
+      if (ch.id) lastChallengeId = ch.id;
+      const grid = el("div", "hkc-grid" + (isNewChallenge ? "" : " static"));
+      ch.tiles.forEach(function (t, idx) {
         const btn = el("button", "hkc-tile");
+        btn.style.setProperty("--hkc-i", String(idx)); // 段階表示(45msずつずらす)
         btn.type = "button";
         btn.setAttribute("aria-pressed", sel.has(t.id) ? "true" : "false");
         // 背景(ぼかし)と前景(全体表示)の2枚でタイルを作る。
@@ -384,6 +440,16 @@
       box.appendChild(el("p", "hkc-msg " + (warn ? "warn" : "ok"), text));
     }
 
+    // 成功: 緑の波紋。失敗: 横に揺れる。どちらもクラスを付け直して再生する
+    function replay(cls, ms) {
+      box.classList.remove(cls);
+      void box.offsetWidth; // リフローでアニメを最初から再生させる
+      box.classList.add(cls);
+      setTimeout(function () { box.classList.remove(cls); }, ms);
+    }
+    function flashDone() { replay("done", 950); }
+    function shakeBox() { replay("shake", 520); }
+
     function load() {
       ch = null; sel = new Set(); progress = 0;
       layerStatus = { img: "", pow: "", beh: "", hp: "" };
@@ -422,7 +488,7 @@
         box.textContent = "";
         box.appendChild(el("p", "hkc-title", "🤖 ロボットでないことを確認(HIKAPTCHA)"));
         var p = el("p", "hkc-prompt");
-        var b = el("b", "all");
+        var b = el("b", "all count");
         b.textContent = "あと" + left + "秒";
         p.appendChild(document.createTextNode("アクセスが集中しています。"));
         p.appendChild(b);
@@ -513,6 +579,7 @@
           ch = { prompt: null, tiles: [] };
           draw();
           msg("ロボット確認OK!", false);
+          flashDone();
           onSolved(j.token, payload.ticket);
           return;
         }
@@ -531,6 +598,7 @@
         layerStatus.img = "off";
         draw();
         msg(j && j.error ? j.error : "不正解です。選び直してください", true);
+        shakeBox();
       } catch (e) {
         busy = false;
         progress = 0;

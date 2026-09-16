@@ -1536,6 +1536,10 @@ function sweep() {
 }
 
 function clientIp(req) {
+  // Cloudflare Tunnel経由の本番では cf-connecting-ip が実クライアント(偽装不可)。
+  // x-forwarded-for は先頭を使うが、経路によっては詐称できるため優先度を下げる。
+  const cf = req.headers["cf-connecting-ip"];
+  if (cf) return String(cf).trim();
   const fwd = req.headers["x-forwarded-for"];
   if (fwd) return String(fwd).split(",")[0].trim();
   return req.headers["x-real-ip"] || req.socket.remoteAddress || "local";
