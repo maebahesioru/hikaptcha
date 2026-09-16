@@ -1658,6 +1658,18 @@ async function handleApi(req, res, url) {
         tokenTtlMs: TOKEN_TTL_MS,
         publicBase: PUBLIC_BASE || null,
       },
+      // 保持している状態のサイズとメモリ使用量(メモリ運用で足りるかの判断材料)
+      state: {
+        challenges: challenges.size,
+        tickets: tickets.size,
+        tokens: tokens.size,
+        images: images.size,
+        recentTagIps: recentTagsByIp.size,
+        companionCache: companionCache.size,
+        rssMB: Math.round(process.memoryUsage().rss / 1048576 * 10) / 10,
+        heapUsedMB: Math.round(process.memoryUsage().heapUsed / 1048576 * 10) / 10,
+        uptimeSec: Math.round(process.uptime()),
+      },
       stats,
     });
   }
