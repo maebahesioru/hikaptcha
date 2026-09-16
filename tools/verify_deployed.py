@@ -2,7 +2,7 @@
 from playwright.sync_api import sync_playwright
 OUT = "C:/Users/maeba/Desktop/hikamani-captcha/.docs-shots"
 with sync_playwright() as p:
-    b = p.chromium.launch()
+    b = p.chromium.launch(args=["--disable-blink-features=AutomationControlled"])
     pg = b.new_page(viewport={"width": 1280, "height": 1000}, device_scale_factor=1.4)
     # ドキュメント
     pg.goto("https://hikaptcha.hikamers.app/docs", wait_until="load")

@@ -67,6 +67,7 @@ const POW_R = Number(process.env.POW_R || 8);
 const POW_P = Number(process.env.POW_P || 1);
 const POW_BITS = Number(process.env.POW_BITS || 6); // scrypt出力の先頭ゼロビット
 const POW_BITS_MAX = Number(process.env.POW_BITS_MAX || 9);
+const IP_SOLVED_DECAY_MS = Number(process.env.IP_SOLVED_DECAY_MS || 30 * 60 * 1000); // 突破実績の保持時間
 const MIN_SOLVE_MS = Number(process.env.MIN_SOLVE_MS || 1500); // 人間が画像を見て選ぶ時間の期待値(ソフトなリスク加点に使う)
 // ハード拒否の下限。既定は MIN_SOLVE_MS と同じ値にして「人間には不可能な速さ」を確実に弾く。
 // ⚠️ 以前はウィジェットが minMs を待たずに送信していたため、この値で正当な回答まで弾かれていた
@@ -192,10 +193,15 @@ function chargeWork(ip, bits, exempt) {
 
 
 // 突破実績の多いIPはPoWを重くする(自動化のコストを段階的に上げる)
+// 突破実績に応じたPoW難易度。⚠️ 減衰させないと、一度突破したIPが永久に高い難易度のままになる
+// (共有IPの正規ユーザーが巻き添えを食う)。最後の突破から IP_SOLVED_DECAY_MS で0に戻す。
 function powBitsFor(ip, exempt) {
   if (exempt) return POW_BITS; // ローカル検証では難易度を上げない
-  const solved = ipSolved.get(ip) || 0;
-  const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / 3));
+  const rec = ipSolved.get(ip) || 0;
+  const solved = typeof rec === "object" ? rec.n : rec;
+  if (typeof rec === "object" && Date.now() - rec.at > IP_SOLVED_DECAY_MS) return POW_BITS;
+  const step = Math.max(1, Number(process.env.POW_RAMP_EVERY || 3)); // 何回突破ごとに+1bit
+  const extra = Math.min(POW_BITS_MAX - POW_BITS, Math.floor(solved / step));
   return POW_BITS + extra;
 }
 
@@ -246,6 +252,14 @@ function riskScore(ch, signals, elapsedMs) {
 
   // 隠し要素への接触
   if (s.touchedHidden === true) { risk += 2; reasons.push("隠し要素への接触"); }
+
+  // 実行環境のシグナル(素のHTTPクライアントでは再現できない手がかり)。
+  // ⚠️ 「情報が無い」だけでは加点しない(カスタム実装・API利用は正当)。敵性のある値だけを見る。
+  if (s.webdriver === true) { risk += 2; reasons.push("webdriverフラグ"); }
+  if (s.noChrome === true) { risk += 1; reasons.push("ブラウザAPIなし"); }
+  const gpu = String(s.gpu || "");
+  if (/swiftshader|llvmpipe|softwarerasterizer|mesa offscreen/i.test(gpu)) { risk += 2; reasons.push("ソフトウェア描画"); }
+  if (s.envError === true) { risk += 2; reasons.push("環境情報の取得失敗"); }
 
   return { risk, reasons };
 }
@@ -1955,6 +1969,8 @@ async function handleApi(req, res, url) {
 
     // --- 層5: 挙動シグナル(補助。偽装可能なので単独では拒否理由にしない) ---
     const { risk, reasons } = riskScore(c, body?.signals, serverElapsed);
+    // 直近のリスク判定を公開(運用で「どんな理由で加点されているか」を見る)
+    stats.lastRisk = { risk, reasons, powMs: Number(body?.signals?.powMs) || 0, at: Date.now() };
     // サーバー観測で人間と確認できている場合は、クライアント申告の不足を重く見ない
     const adjustedRisk = Math.max(0, risk - 1);
     if (adjustedRisk >= RISK_REJECT) {
@@ -1982,7 +1998,11 @@ async function handleApi(req, res, url) {
       const token = randomBytes(24).toString("hex");
       // トークンをチケットに束縛(他人のトークンを流用しても消費できない)
       tokens.set(token, { exp: Date.now() + TOKEN_TTL_MS, ticket: String(body?.ticket || "") });
-      ipSolved.set(ip, (ipSolved.get(ip) || 0) + 1);
+      {
+        const prev = ipSolved.get(ip);
+        const n = (typeof prev === "object" ? prev.n : prev || 0) + 1;
+        ipSolved.set(ip, { n, at: Date.now() });
+      }
       return sendJson(res, 200, { ok: true, token, risk: adjustedRisk, serverElapsedMs: serverElapsed, imagesFetched: fetched });
     }
 

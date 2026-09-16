@@ -283,6 +283,30 @@
 
     // 挙動シグナル(補助。サーバー側は画像配信の有無と実測時間を主軸に見る)
     const sig = { interactionSeen: false, pointerMoves: 0, pointerDistance: 0, clicks: 0, touchSeen: false, keySeen: false, powMs: 0 };
+
+    // 実行環境のシグナル。ブラウザらしさの手がかりで、素のHTTPクライアントでは再現できない。
+    // (自動化検出: webdriver / ヘッドレス特有の値 / 描画・入力デバイスの有無)
+    (function collectEnv() {
+      try {
+        const n = navigator || {};
+        sig.webdriver = n.webdriver === true;
+        sig.noChrome = typeof window.chrome === "undefined";
+        sig.plugins = (n.plugins && n.plugins.length) || 0;
+        sig.langs = (n.languages && n.languages.length) || 0;
+        sig.cores = n.hardwareConcurrency || 0;
+        sig.mem = n.deviceMemory || 0;
+        sig.tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+        sig.touch = ("ontouchstart" in window) || (n.maxTouchPoints > 0);
+        sig.screen = `${window.screen ? window.screen.width : 0}x${window.screen ? window.screen.height : 0}`;
+        // WebGLのGPU名(ヘッドレスは SwiftShader / llvmpipe になりがち)
+        const c = document.createElement("canvas");
+        const gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+        if (gl) {
+          const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          sig.gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || "") : "";
+        }
+      } catch (e) { sig.envError = true; }
+    })();
     let lastX = null, lastY = null;
     function onMove(e) {
       sig.interactionSeen = true;

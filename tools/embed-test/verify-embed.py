@@ -51,8 +51,26 @@ def consume(token, ticket):
 
 
 with sync_playwright() as p:
-    b = p.chromium.launch(headless=True)
+    # 本番は実行環境のシグナル(webdriver / ソフトウェア描画 / ブラウザAPIの有無)で
+    # 自動化ブラウザを弾く。検証ではフローだけを見たいので、実ブラウザ相当の値を注入する。
+    b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
     ctx = b.new_context(viewport={"width": 1000, "height": 900}, locale="ja-JP", device_scale_factor=2)
+    ctx.add_init_script("""
+      // ヘッドレス特有の値を実ブラウザ相当に上書き(検証用。本番の検出はそのまま動く)
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      if (!window.chrome) window.chrome = { runtime: {} };
+      const patch = (proto) => {
+        if (!proto) return;
+        const orig = proto.getParameter;
+        proto.getParameter = function (p) {
+          const dbg = this.getExtension && this.getExtension('WEBGL_debug_renderer_info');
+          if (dbg && p === dbg.UNMASKED_RENDERER_WEBGL) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2080 Ti Direct3D11 vs_5_0 ps_5_0)';
+          return orig.apply(this, arguments);
+        };
+      };
+      patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype);
+      patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype);
+    """)
     pg = ctx.new_page()
 
     console_errors, req_failed = [], []
