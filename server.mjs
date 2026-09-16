@@ -804,6 +804,9 @@ async function fetchRandomImageBatch(limit, level = 0) {
 //   not    「◯◯が写っていない画像を全部」   … 持たない × 全部
 //   notpick「◯◯が写っていない画像を◯枚だけ」… 持たない × N枚
 //   or     「◯◯または△△が写っている画像を全部」
+//   xor    「◯◯か△△の片方だけが写っている画像を全部」
+//   notor  「◯◯も△△も写っていない画像を全部」
+//   withnot「◯◯が写っていて△△が写っていない画像を全部」
 //   and    「◯◯と△△の両方が写っている画像を全部」(実測で成立しなかったため既定0)
 // 重みは MODE_WEIGHTS="single=3,not=2,pick=2,or=1" で調整できる(重み0で無効化)。
 // 実測(2026-09): 形式ごとに人間が解けるかをvisionで採点して重みを決めている(README参照)。
@@ -815,8 +818,11 @@ const MODE_WEIGHTS = (() => {
   //   pick   … 「◯枚だけ」は枚数固定のためタグ1つの誤りが即不正解(実測3件すべてで1枚ずれ)
   //   or     … ダミーが2つのタグ両方を持たない必要があり、誤漏れに弱い(実測で余分な正解が出た)
   //   and    … AIタグ付けでは成立しない(過去に実測4件すべて失敗)
-  // pick / or / and を増やしたい場合は MODE_WEIGHTS を指定する
-  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,and=0";
+  //   xor    … 「片方だけ」は2語を照合する必要があり誤りは増えるが、実測5件で完全一致1・誤り平均1.2枚
+  //   notor  … 「どちらも写っていない」は not と同じ形で、実測3件で誤り平均2.0枚(notと同等)
+  //   withnot… 「Aが写っていてBが写っていない」は実測2件で完全一致1・誤り平均0.5枚(良好)
+  // 重みを変えたい場合は MODE_WEIGHTS を指定する
+  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,and=0";
   const m = new Map();
   for (const part of raw.split(",")) {
     const [k, v] = part.split("=");
@@ -867,6 +873,12 @@ function buildAsk(mode, tags, n) {
       return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」または「${b}」が写っている画像を全部選んでください` };
     case "and":
       return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」と「${b}」の両方が写っている画像を全部選んでください` };
+    case "xor":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」か「${b}」の片方だけが写っている画像を全部選んでください` };
+    case "notor":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」も「${b}」も写っていない画像を全部選んでください` };
+    case "withnot":
+      return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」が写っていて「${b}」が写っていない画像を全部選んでください` };
     default:
       return { mode: "single", tags, n: 0, maxSelect: 0, text: `「${a}」の画像を全部選んでください` };
   }
@@ -1150,8 +1162,11 @@ async function makeChallenge(ip = "") {
     let distractorPool = [];
     let askN = 0;
 
-    if (mode === "and" || mode === "or") {
-      // 2タグ: AND=両方を持つ画像 / OR=どちらかを持つ画像が正解
+    const PAIR_MODES = new Set(["and", "or", "xor", "notor", "withnot"]);
+    if (PAIR_MODES.has(mode)) {
+      // 2タグの組み合わせ方で出題を作る:
+      //   and   両方が写っている / or どちらかが写っている / xor 片方だけ写っている
+      //   notor どちらも写っていない / withnot Aが写っていてBが写っていない
       const pairCands = [];
       const tagList = [...byTag.entries()];
       for (let a = 0; a < tagList.length; a++) {
@@ -1166,17 +1181,33 @@ async function makeChallenge(ip = "") {
           let both = 0;
           for (const idx of va.imgs) if (vb.imgs.has(idx)) both++;
           const union = new Set([...va.imgs, ...vb.imgs]).size;
+          const na = va.imgs.size, nb = vb.imgs.size;
+          const onlyA = na - both, onlyB = nb - both, exactlyOne = onlyA + onlyB;
+          const neither = batch.length - union;
           if (mode === "and") {
-            if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+            if (na < 2 || nb < 2) continue;
             if (both < 2 || both > (relaxed ? 4 : 3)) continue; // 両方を持つ画像が2〜3枚
             if (!relaxed && union > 8) continue; // 広すぎる(ダミーが作れない)
-          } else {
+          } else if (mode === "or") {
             // OR: 両方を持つ画像があると「どちらか」の答えが紛れるので避ける
             if (both >= 1) continue;
-            if (va.imgs.size < 2 || vb.imgs.size < 2) continue;
+            if (na < 2 || nb < 2) continue;
             if (union > 6) continue;
+          } else if (mode === "xor") {
+            // 正解=片方だけ写っている画像。両方を持つ画像があれば強い引っかけになる
+            if (exactlyOne < 2 || exactlyOne > (relaxed ? 7 : 5)) continue;
+            if (na < 1 || nb < 1) continue;
+            if (!relaxed && union > 8) continue;
+          } else if (mode === "notor") {
+            // 正解=どちらも写っていない画像。グリッドの大半を正解で埋める(notと同じ形)
+            if (neither < GRID_SIZE - 3) continue;
+            if (union < 2 || union > 4) continue;
+          } else if (mode === "withnot") {
+            // 正解=Aが写っていてBが写っていない画像。Bを持つ画像が引っかけになる
+            if (onlyA < 2 || onlyA > 5) continue;
+            if (nb < 1) continue;
           }
-          pairCands.push({ a: ta, b: tb, both, ua: va.usages, ub: vb.usages, union });
+          pairCands.push({ a: ta, b: tb, both, union, onlyA, onlyB, exactlyOne, neither, ua: va.usages, ub: vb.usages });
         }
       }
       if (!pairCands.length) { stats.fNoPair++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoPair" + " mode=" + mode + "\n"); continue; }
@@ -1198,11 +1229,20 @@ async function makeChallenge(ip = "") {
       promptTags = [pick.a, pick.b];
       const setA = byTag.get(pick.a).imgs;
       const setB = byTag.get(pick.b).imgs;
-      if (mode === "or") {
-        targetIdxs = [...new Set([...setA, ...setB])];
-      } else {
-        for (const idx of setA) if (setB.has(idx)) targetIdxs.push(idx);
+      // 画像を4つの領域に分ける(両方 / Aだけ / Bだけ / どちらも無い)
+      const bothIdxs = [], aOnlyIdxs = [], bOnlyIdxs = [], neitherIdxs = [];
+      for (let idx = 0; idx < batch.length; idx++) {
+        const inA = setA.has(idx), inB = setB.has(idx);
+        if (inA && inB) bothIdxs.push(idx);
+        else if (inA) aOnlyIdxs.push(idx);
+        else if (inB) bOnlyIdxs.push(idx);
+        else neitherIdxs.push(idx);
       }
+      if (mode === "or") targetIdxs = [...aOnlyIdxs, ...bOnlyIdxs, ...bothIdxs];
+      else if (mode === "and") targetIdxs = bothIdxs;
+      else if (mode === "xor") targetIdxs = [...aOnlyIdxs, ...bOnlyIdxs];
+      else if (mode === "notor") targetIdxs = neitherIdxs;
+      else if (mode === "withnot") targetIdxs = aOnlyIdxs;
       // ダミー: ANDは「片方だけ持つ画像」を優先的に引っかけにする。ORは「どちらも持たない画像」だけ
       // お題タグと関連する別タグを持つ画像は、人間には「写っている」と見えるので除外する
       const relPair = new Set();
@@ -1413,7 +1453,7 @@ async function makeChallenge(ip = "") {
     //    このフィルタの前提(正解同士が似ている)が成り立たないので適用しない。
     if (
       targetIdxs.length >= 2 && !relaxed &&
-      (mode === "single" || mode === "pick" || mode === "and" || mode === "or")
+      (mode === "single" || mode === "pick" || mode === "and" || mode === "or" || mode === "xor" || mode === "withnot")
     ) {
       const jac = (a, b) => {
         const A = new Set(a), B = new Set(b);
