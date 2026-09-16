@@ -1371,7 +1371,7 @@ async function makeChallenge(ip = "") {
         if (w > 0) for (let k = 0; k < w; k++) roulette.push({ tag, n, usages: v.usages });
         if (w > 0) stats.wSum = (stats.wSum || 0) + w;
       }
-      if (mode === "count" && !roulette.length) { stats.fNoTag++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTag" + " mode=" + mode + "\n"); continue; }
+      if (!roulette.length) { stats.fNoTag++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNoTag" + " mode=" + mode + "\n"); continue; }
       // 直近に出したタグ(とその類似タグ)は避ける。避けた結果ゼロなら全体から選ぶ
       // ⚠️ 重みを下げる方式では人気タグが結局勝っていた(実測: 礼服×10)ので、除外に切り替える
       let pick = null;
