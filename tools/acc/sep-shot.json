@@ -1,0 +1,68 @@
+[
+ {
+  "n": 0,
+  "prompt": "「茶髪」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.7,
+  "inter": 31.3,
+  "sep": 0.99,
+  "nearest": 23,
+  "minDT": 23
+ },
+ {
+  "n": 1,
+  "prompt": "「時計」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 2,
+  "intra": 13,
+  "inter": 23.4,
+  "sep": 1.8,
+  "nearest": 21.9,
+  "minDT": 15
+ },
+ {
+  "n": 2,
+  "prompt": "「自動車」か「イヤホン」の片方だけが写っている画像を全部選んでください",
+  "mode": "xor",
+  "nTargets": 2,
+  "intra": 24,
+  "inter": 31.4,
+  "sep": 1.31,
+  "nearest": 29.4,
+  "minDT": 21
+ },
+ {
+  "n": 3,
+  "prompt": "「クエスチョンマーク」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 32.9,
+  "sep": 32.88,
+  "nearest": 32.9,
+  "minDT": 29
+ },
+ {
+  "n": 4,
+  "prompt": "「電気」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 30.2,
+  "inter": 30.4,
+  "sep": 1.01,
+  "nearest": 25,
+  "minDT": 25
+ },
+ {
+  "n": 5,
+  "prompt": "「スプーン」か「寝具」の片方だけが写っている画像を全部選んでください",
+  "mode": "xor",
+  "nTargets": 2,
+  "intra": 24,
+  "inter": 34.3,
+  "sep": 1.43,
+  "nearest": 31.1,
+  "minDT": 19
+ }
+]

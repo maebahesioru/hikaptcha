@@ -598,12 +598,17 @@ function concreteness(usages) {
 
 // 配信は contain(クロップなし)なので、極端に細長い画像以外は受け入れる。
 // クロップをやめたので、以前のような「3:2付近しか使えない(全体の2.8%)」制約は不要。
+// タイル(3:2)に「contain+ぼかし背景」で収める関係で、極端な縦長・横長は避ける。
+// 範囲を広げるとプールは増えるが、余白が大きくなり被写体が小さく見える。
+const ASPECT_MIN = Number(process.env.ASPECT_MIN || 1.0);
+const ASPECT_MAX = Number(process.env.ASPECT_MAX || 2.2);
+
 function goodAspect(p) {
   const w = Number(p.canvasWidth) || 0;
   const h = Number(p.canvasHeight) || 0;
   if (!w || !h) return false;
   const r = w / h;
-  return r >= 1.0 && r <= 2.2; // 正方形〜横長(タイル3:2にcontainで収まる範囲)
+  return r >= ASPECT_MIN && r <= ASPECT_MAX;
 }
 
 // 画像プロキシ + 改変: 元URLにはhikabooruの投稿IDが含まれるため、そのまま渡すと
@@ -737,7 +742,9 @@ async function fetchSlice(offset, limit, level = 0) {
       if (!p || !p.id || !p.thumbnailUrl || !goodAspect(p)) return false;
       if (level >= 2) return true; // 緩和段階2: スクリーンショットも許容(出題不能を避ける)
       const names = (p.tags || []).map((x) => ((x.names && x.names[0]) || "").toLowerCase());
-      if (names.some((n) => SCREENSHOT_TAGS.has(n))) return false; // 画面キャプチャ除外
+      // 画面キャプチャ除外(実測: 安全画像の約42%が該当。緩めるとプールは増えるが、
+      // 被写体が画面の小さなアバターになり人間には判定できない出題が増える)
+      if (SCREENSHOT_FILTER && names.some((n) => SCREENSHOT_TAGS.has(n))) return false;
       if (level === 0 && names.length > MAX_TAGS_PER_IMAGE) return false; // 雑然とした画像を除外
       return true;
     })
@@ -852,6 +859,8 @@ const BATCH_LIMIT = Number(process.env.BATCH_LIMIT || 60);
 // プールにする投稿のクエリ。既定は静止画のみ("safety:safe type:image")。
 // 動画・GIFも使うなら "safety:safe" を指定する。
 const POOL_QUERY = process.env.POOL_QUERY || "safety:safe type:image";
+// 画面キャプチャ系の画像をプールから除外するか(既定は除外)
+const SCREENSHOT_FILTER = process.env.SCREENSHOT_FILTER !== "0";
 
 // 1バッチを何個の「離れたoffset」から集めるか。
 // 1にすると連続した塊を引いてしまい、9枚が同じ撮影/同じチャンネルになる(実測で確認)。

@@ -1,0 +1,68 @@
+[
+ {
+  "n": 0,
+  "prompt": "「アルコール」が写っていて「スプーン」が写っていない画像を全部選んでください",
+  "mode": "withnot",
+  "nTargets": 2,
+  "intra": 22,
+  "inter": 30.7,
+  "sep": 1.4,
+  "nearest": 28,
+  "minDT": 19
+ },
+ {
+  "n": 1,
+  "prompt": "「リボン」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 31.8,
+  "inter": 32.3,
+  "sep": 1.01,
+  "nearest": 23,
+  "minDT": 23
+ },
+ {
+  "n": 2,
+  "prompt": "「ビジネススーツ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 7,
+  "intra": 29,
+  "inter": 33.2,
+  "sep": 1.14,
+  "nearest": 27,
+  "minDT": 23
+ },
+ {
+  "n": 3,
+  "prompt": "「半袖」の画像を全部選んでください",
+  "mode": "single",
+  "nTargets": 4,
+  "intra": 11.7,
+  "inter": 27.4,
+  "sep": 2.35,
+  "nearest": 24,
+  "minDT": 12
+ },
+ {
+  "n": 4,
+  "prompt": "「ゲイマスオ」が写っていない画像を全部選んでください",
+  "mode": "not",
+  "nTargets": 8,
+  "intra": 32,
+  "inter": 34.4,
+  "sep": 1.07,
+  "nearest": 31,
+  "minDT": 31
+ },
+ {
+  "n": 5,
+  "prompt": "「上着」が写っている画像を1枚だけ選んでください",
+  "mode": "pick",
+  "nTargets": 1,
+  "intra": 0,
+  "inter": 33.6,
+  "sep": 33.63,
+  "nearest": 33.6,
+  "minDT": 19
+ }
+]

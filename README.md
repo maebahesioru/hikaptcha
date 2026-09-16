@@ -288,8 +288,8 @@ curl -X POST https://hikaptcha.hikamers.app/api/verify -H "content-type: applica
 | `SITE_POSTS` | 56000 | IDF計算の分母(サイト全体のおおよその枚数) |
 | `RECENT_TAG_TTL_MS` | 900000 (15分) | 直近に使ったお題タグを避け続ける時間 |
 | `RECENT_TAG_MAX` | 200 | 1IPあたりに記憶するタグ数 |
-| `BATCH_LIMIT` | 60 | 1回に取得する画像の枚数 |
-| `SAMPLES_PER_BATCH` | 6 | バッチを構成する「離れたoffset」の数 |
+| `BATCH_LIMIT` | 60 | 1回に取得する画像の枚数(大きくすると候補が増えて空振りが減る。実測: 100にすると試行が17%減・所要時間は同等) |
+| `SAMPLES_PER_BATCH` | 6 | バッチを構成する「離れたoffset」の数(枚数に合わせて増やす) |
 | `VIS_FILTER` | 1 | `0` で視覚フィルタを無効化 |
 | `VIS_MAX_DIST_RATIO` | 1.0 | 視覚フィルタの閾値(却下のたびに+0.12緩和) |
 | `TARGET_ASPECT` | 1.5 | 配信画像の目標アスペクト比 |
