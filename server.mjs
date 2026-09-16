@@ -650,6 +650,9 @@ const TRANSFORM = process.env.IMG_TRANSFORM !== "0"; // 0で無効化
 // 配信画像の形式。webpは同じ見た目で3割ほど軽い(対応ブラウザは実質全部)
 const IMG_FORMAT = process.env.IMG_FORMAT || "webp";
 const WEBP_Q = Number(process.env.WEBP_Q || 70); // 0-100(高いほど高画質)
+// 明暗タスクの閾値: これより明るい画像/暗い画像だけを出題に使う(中間は使わない=誰が見ても分かる)
+const BRIGHT_HI = Number(process.env.BRIGHT_HI || 118);
+const BRIGHT_LO = Number(process.env.BRIGHT_LO || 82);
 const JPEG_Q = Number(process.env.JPEG_Q || 3); // 再圧縮品質
 const IMG_LONG_EDGE = Number(process.env.IMG_LONG_EDGE || 640); // 長辺のピクセル数
 
@@ -677,7 +680,7 @@ let tmpSeq = 0;
 //    日本語テキストが鏡像になって読みにくくなる(見づらさの原因)
 //  - 回転も使わない(黒い三角が出る・幾何変換は適応的攻撃者に効かない)
 //  残るのは再圧縮と微小なガンマのみ。バイト一致は防げるが知覚索引には弱い(README参照)。
-async function transformImage(buf, rotateDeg = 0) {
+async function transformImage(buf, rotateDeg = 0, piece = -1) {
   if (!TRANSFORM || !hasFfmpeg()) return null;
   const id = (tmpSeq = (tmpSeq + 1) % 100000);
   const inp = path.join(TMP, `i${id}.jpg`);
@@ -712,7 +715,7 @@ async function transformImage(buf, rotateDeg = 0) {
   }
 }
 
-function registerImage(upstreamUrl, challengeId, rotateDeg = 0) {
+function registerImage(upstreamUrl, challengeId, rotateDeg = 0, piece = -1) {
   const id = randomBytes(12).toString("hex");
   images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS, challengeId, rot: rotateDeg || 0, buf: null, transformed: null });
   if (images.size > IMG_MAX) {
@@ -925,6 +928,12 @@ function buildAsk(mode, tags, n) {
       return { mode, tags: [], n: 0, maxSelect: 0, step: 90, text: "画像が正しい向きになるように回してください" };
     case "portrait":
       return { mode, tags: [], n: 0, maxSelect: 0, text: "縦長の画像を全部選んでください" };
+    case "bright":
+      return { mode, tags: [], n: 0, maxSelect: 0, text: "明るい画像を全部選んでください" };
+    case "odd":
+      return { mode, tags: [], n: 0, maxSelect: 1, text: "1枚だけ仲間外れの画像を選んでください" };
+    case "count":
+      return { mode, tags, n, maxSelect: 0, count: true, text: `「${tags[0]}」が写っている画像は何枚ありますか?(半角数字で回答)` };
 
     default:
       return { mode: "single", tags, n: 0, maxSelect: 0, text: `「${a}」の画像を全部選んでください` };
@@ -991,6 +1000,43 @@ function sigs8x8Batch(bufs) {
 }
 
 // 距離比(大きいほど見分けにくい)を返す。判定不能なら null(フィルタは素通し)。
+// 8x8署名から平均輝度(0-255)を出す。明暗タスクの正解判定に使う
+// 署名はUint8Arrayでもhex文字列でも来るので、バイト列に正規化する
+function sigBytes(s) {
+  if (!s) return null;
+  if (typeof s === "string") {
+    const n = Math.floor(s.length / 2), out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+      if (Number.isNaN(v)) return null;
+      out[i] = v;
+    }
+    return out.length ? out : null;
+  }
+  if (s.length) return Array.from(s);
+  return null;
+}
+
+async function lumasOf(bufs) {
+  const sigs = await sigs8x8Batch(bufs);
+  if (!sigs || !Array.isArray(sigs)) return bufs.map(() => -1); // 署名が取れない画像は「不明」扱い
+  return sigs.map((raw) => {
+    const s = sigBytes(raw);
+    if (!s) return -1;
+    let sum = 0;
+    for (let i = 0; i < s.length; i++) sum += s[i];
+    return sum / s.length;
+  });
+}
+// 2つの署名の平均絶対差(0=同一)。仲間外れ判定に使う
+function sigDistance(a, b) {
+  const x = sigBytes(a), y = sigBytes(b);
+  if (!x || !y || x.length !== y.length) return 999;
+  let sum = 0;
+  for (let i = 0; i < x.length; i++) sum += Math.abs(x[i] - y[i]);
+  return sum / x.length;
+}
+
 async function distanceRatio(pairs) {
   if (!VIS_FILTER || pairs.length !== 9) return null;
   try {
@@ -1175,7 +1221,10 @@ async function makeChallenge(ip = "") {
     const level = LEVELS[i];
     const relaxed = level >= 2;
     // 形式を先に決めてからバッチを取る。notpick は「タグがグリッドをほぼ埋める」画像が要るため多めに取る
-    const mode = chooseMode();
+    const rawMode = chooseMode();
+    // 枚数回答は「タグ抽選・正解画像」が single と完全に同じ。内部は single で作り、文面と検証だけ差し替える
+    const countMode = rawMode === "count";
+    const mode = countMode ? "single" : rawMode;
     // 縦横タスクは縦長の画像が要るので、この形式のときだけ許容範囲を広げて取りに行く
     const prevAspect = { min: ASPECT_MIN, max: ASPECT_MAX };
     if (mode === "portrait") { ASPECT_MIN = 0.45; ASPECT_MAX = 2.6; }
@@ -1209,6 +1258,7 @@ async function makeChallenge(ip = "") {
 
     // --- 出題形式を決めて、正解とダミー候補を作る ---
     let promptTags = [];
+    let puzzleSrcIdx = -1; // パズルの元画像(1枚を9分割して配る)
     let targetIdxs = [];
     let distractorPool = [];
     let askN = 0;
@@ -1226,6 +1276,67 @@ async function makeChallenge(ip = "") {
       if (tall.length < 2 || wide.length < 3) { stats.fNoTag++; continue; }
       targetIdxs = shuffle(tall).slice(0, Math.min(5, tall.length));
       distractorPool = shuffle(wide);
+      promptTags = [];
+    } else if (mode === "bright") {
+      // 明暗タスク: 実際のピクセルから平均輝度を出し、明朗な画像と暗い画像に分ける
+      const cand = shuffle(batch.map((_, i) => i)).slice(0, Math.min(14, batch.length));
+      const idxs = [], bufs = [];
+      for (const i of cand) {
+        try {
+          const b = await hkFetch(batch[i].url, 6000);
+          if (!b || !b.length) continue; // 取れなかった画像は数えない
+          idxs.push(i); bufs.push(b);
+        } catch { /* skip */ }
+      }
+      if (idxs.length < 6) { stats.fPool++; continue; }
+      const lums = await lumasOf(bufs);
+      const bright = [], dark = [];
+      idxs.forEach((i, k) => {
+        const L = lums[k];
+        if (L >= BRIGHT_HI) bright.push(i);
+        else if (L >= 0 && L <= BRIGHT_LO) dark.push(i);
+      });
+      if (bright.length < 2 || dark.length < 3) { stats.fPool++; continue; }
+      targetIdxs = shuffle(bright).slice(0, Math.min(4, bright.length));
+      distractorPool = shuffle(dark);
+      promptTags = [];
+    } else if (mode === "odd") {
+      // 仲間外れ: 同じ投稿者の画像8枚 + 別シリーズ1枚。署名距離で「本当に浮いている」ものだけ採用
+      const bySrc = new Map();
+      batch.forEach((b, i) => {
+        if (!b.src) return;
+        if (!bySrc.has(b.src)) bySrc.set(b.src, []);
+        bySrc.get(b.src).push(i);
+      });
+      const groups = [...bySrc.values()].filter((g) => g.length >= 8);
+      if (!groups.length) { stats.fPool++; continue; }
+      const g = shuffle(groups)[0].slice(0, 8);
+      const others = batch.map((_, i) => i).filter((i) => !g.includes(i) && batch[i].src !== batch[g[0]].src);
+      if (!others.length) { stats.fPool++; continue; }
+      const outIdx = shuffle(others)[0];
+      const nine = [...g, outIdx], bufs = [];
+      let fetchOk = true;
+      for (const i of nine) {
+        try { bufs.push(await hkFetch(batch[i].url, 6000)); } catch { fetchOk = false; break; }
+      }
+      if (!fetchOk || bufs.some((b) => !b || !b.length)) { stats.fPool++; continue; }
+      const sigs = await sigs8x8Batch(bufs);
+      if (!sigs || !Array.isArray(sigs)) { stats.fPool++; continue; } // 署名が取れないときは出さない
+      const dOut = sigs.slice(0, 8).map((s) => sigDistance(s, sigs[8]));
+      const dIn = [];
+      for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) dIn.push(sigDistance(sigs[a], sigs[b]));
+      const mOut = dOut.reduce((x, y) => x + y, 0) / dOut.length;
+      const mIn = dIn.reduce((x, y) => x + y, 0) / dIn.length;
+      if (!(mOut > mIn * 1.35 && mOut > 10)) { stats.fPool++; continue; } // 紛らわしい組は出さない
+      targetIdxs = [outIdx];
+      distractorPool = g;
+      promptTags = [];
+    } else if (mode === "puzzle") {
+      // スライダーパズル: 1枚を3x3に切って8ピース+空白。正解は元の並び(タイルIDの順で突き合わせる)
+      const pIdx = Math.floor(Math.random() * batch.length);
+      targetIdxs = [];
+      distractorPool = [];
+      puzzleSrcIdx = pIdx;
       promptTags = [];
     } else if (mode === "rotate") {
       // 回転タスク: 1枚を90/180/270度回した状態で出し、正しい向きに戻させる。
@@ -1622,9 +1733,17 @@ async function makeChallenge(ip = "") {
     stats.modes[mode] = (stats.modes[mode] || 0) + 1;
     if (relaxed) stats.relaxedUsed++;
     const ask = buildAsk(mode, promptTags, askN);
+    if (countMode) {
+      // 枚数回答: 文面と検証方法だけ差し替える(正解はタグ付き画像の枚数)
+      ask.mode = "count";
+      ask.count = true;
+      ask.n = targetIdxs.length;
+      ask.text = `「${(ask.tags && ask.tags[0]) || "?"}」が写っている画像は何枚ありますか?(半角数字)`;
+    }
     return {
       id: cid,
       rotateApplied, // 回転タスクの適用角度(本番の応答では落とす)
+      countAnswer: countMode ? targetIdxs.length : undefined, // 枚数回答の正解
       prompt: ask.text, // 表示用の文面(形式ごとに変わる)
       ask, // 形式・タグ・選択枚数。クライアントはこれを見て表示する
       tags: promptTags, // 機械可読な出題タグ
@@ -2013,6 +2132,19 @@ async function handleApi(req, res, url) {
         risk: RISK_REJECT,
         expired: true,
       });
+    }
+
+    // 枚数回答: 申告された枚数を正解と突き合わせる
+    if (c.ask && c.ask.count) {
+      if (Number(body?.count) !== Number(c.countAnswer)) {
+        c.attempts = (c.attempts || 0) + 1;
+        const left = MAX_ATTEMPTS - c.attempts;
+        if (left <= 0) {
+          challenges.delete(id);
+          return sendJson(res, 410, { ok: false, error: "不正解です。新しい問題に挑戦してください", expired: true });
+        }
+        return sendJson(res, 400, { ok: false, error: `枚数が違います(あと${left}回)`, remaining: left });
+      }
     }
 
     // 回転タスク: 申告された角度を、サーバーが適用した角度と突き合わせる
