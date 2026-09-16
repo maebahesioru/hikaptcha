@@ -96,6 +96,21 @@ const tickets = new Map(); // ticket -> {ip, exp}
 
 // ---------- hikabooru API ----------
 
+// 画像そのものを取ってくる(booru API用の hkFetch とは別物。あちらはJSONを返す)
+async function fetchImageBuf(url, timeoutMs = 8000) {
+  try {
+    const r = await fetch(url, {
+      headers: { "user-agent": "hikamani-captcha/1.0" },
+      signal: AbortSignal.timeout(timeoutMs),
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    return Buffer.from(await r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 async function hkFetch(p, timeoutMs = 8000) {
   try {
     const res = await fetch(HIKABOORU_API + p, {
@@ -862,7 +877,7 @@ const MODE_WEIGHTS = (() => {
   //   notor  … 「どちらも写っていない」は not と同じ形で、実測3件で誤り平均2.0枚(notと同等)
   //   withnot… 「Aが写っていてBが写っていない」は実測2件で完全一致1・誤り平均0.5枚(良好)
   // 重みを変えたい場合は MODE_WEIGHTS を指定する
-  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,rotate=1,portrait=1,and=0";
+  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,bright=2,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,rotate=1,portrait=1,and=0,bright=1";
   const m = new Map();
   for (const part of raw.split(",")) {
     const [k, v] = part.split("=");
@@ -1017,24 +1032,54 @@ function sigBytes(s) {
   return null;
 }
 
+// 16x16グレースケール(256バイト)の署名。64bit知覚ハッシュは粗すぎて類似判定に使えない(実測: 全画像が距離30前後)
+async function sig16sOf(bufs) {
+  const out = [];
+  for (const buf of bufs) {
+    try {
+      const tf = `.s16-${Date.now()}-${Math.random().toString(36).slice(2)}.img`;
+      writeFileSync(tf, buf);
+      const r = await execFileP("ffmpeg", ["-loglevel", "error", "-i", tf, "-vf", "scale=16:16,format=gray", "-f", "rawvideo", "-"], { timeout: 8000, encoding: "buffer", maxBuffer: 8192 }).catch(() => null);
+      try { unlinkSync(tf); } catch { /* ignore */ }
+      out.push(r && r.stdout && r.stdout.length >= 256 ? Array.from(r.stdout.slice(0, 256)) : null);
+    } catch { out.push(null); }
+  }
+  return out;
+}
+function sig16Dist(a, b) {
+  if (!a || !b) return 999;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += Math.abs(a[i] - b[i]);
+  return sum / 256;
+}
+
+// 画像の平均輝度(0-255)を1枚ずつ実測する。sigs8x8Batch は64bit知覚ハッシュ(0/1)なので輝度には使えない
 async function lumasOf(bufs) {
-  const sigs = await sigs8x8Batch(bufs);
-  if (!sigs || !Array.isArray(sigs)) return bufs.map(() => -1); // 署名が取れない画像は「不明」扱い
-  return sigs.map((raw) => {
-    const s = sigBytes(raw);
-    if (!s) return -1;
-    let sum = 0;
-    for (let i = 0; i < s.length; i++) sum += s[i];
-    return sum / s.length;
-  });
+  const out = [];
+  for (const buf of bufs) {
+    try {
+      const tf = `.lum-${Date.now()}-${Math.random().toString(36).slice(2)}.img`;
+      writeFileSync(tf, buf);
+      const r = await execFileP("ffmpeg", ["-loglevel", "error", "-i", tf, "-vf", "scale=1:1,format=gray", "-f", "rawvideo", "-"], { timeout: 8000, encoding: "buffer", maxBuffer: 4096 }).catch(() => null);
+      try { unlinkSync(tf); } catch { /* ignore */ }
+      out.push(r && r.stdout && r.stdout.length ? r.stdout[0] : -1);
+    } catch {
+      out.push(-1);
+    }
+  }
+  return out;
 }
 // 2つの署名の平均絶対差(0=同一)。仲間外れ判定に使う
+// 知覚ハッシュ同士のハミング距離(異なるビット数)。0=同一、64=全ビット違い
 function sigDistance(a, b) {
   const x = sigBytes(a), y = sigBytes(b);
   if (!x || !y || x.length !== y.length) return 999;
-  let sum = 0;
-  for (let i = 0; i < x.length; i++) sum += Math.abs(x[i] - y[i]);
-  return sum / x.length;
+  let bits = 0;
+  for (let i = 0; i < x.length; i++) {
+    let v = x[i] ^ y[i];
+    while (v) { bits += v & 1; v >>= 1; }
+  }
+  return bits;
 }
 
 async function distanceRatio(pairs) {
@@ -1278,65 +1323,64 @@ async function makeChallenge(ip = "") {
       distractorPool = shuffle(wide);
       promptTags = [];
     } else if (mode === "bright") {
+      if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[dbg] bright分岐に入った batch=" + batch.length + "\n");
       // 明暗タスク: 実際のピクセルから平均輝度を出し、明朗な画像と暗い画像に分ける
       const cand = shuffle(batch.map((_, i) => i)).slice(0, Math.min(14, batch.length));
       const idxs = [], bufs = [];
       for (const i of cand) {
         try {
-          const b = await hkFetch(batch[i].url, 6000);
+          const b = await fetchImageBuf(batch[i].url, 6000);
           if (!b || !b.length) continue; // 取れなかった画像は数えない
           idxs.push(i); bufs.push(b);
         } catch { /* skip */ }
       }
+      if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[dbg] bright fetch idxs=" + idxs.length + " type=" + (bufs[0] ? (bufs[0].constructor ? bufs[0].constructor.name : typeof bufs[0]) : "none") + "\n");
       if (idxs.length < 6) { stats.fPool++; continue; }
       const lums = await lumasOf(bufs);
-      const bright = [], dark = [];
-      idxs.forEach((i, k) => {
-        const L = lums[k];
-        if (L >= BRIGHT_HI) bright.push(i);
-        else if (L >= 0 && L <= BRIGHT_LO) dark.push(i);
-      });
-      if (bright.length < 2 || dark.length < 3) { stats.fPool++; continue; }
+      // 実測: 平均輝度はおおむね100〜180。絶対値でなくサンプル内の分位点で分け、
+      // 境界から30以上離れた画像だけを使う(誰が見ても明るい/暗いと言える組だけ出す)
+      const pairs2 = idxs.map((i, k) => [i, lums[k]]).filter(([, L]) => L >= 0);
+      if (pairs2.length < 8) { stats.fPool++; continue; }
+      const vals = pairs2.map(([, L]) => L).sort((a, b) => a - b);
+      const hi = Math.max(BRIGHT_HI, vals[Math.floor(vals.length * 0.65)]);
+      const bright = pairs2.filter(([, L]) => L >= hi).map(([i]) => i);
+      const dark = pairs2.filter(([, L]) => L <= hi - 30).map(([i]) => i);
+      if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", `[bright2] hi=${hi} bright=${bright.length} dark=${dark.length}\n`);
+      if (bright.length < 2 || dark.length < 3 || bright.length + dark.length < 8) { stats.fPool++; continue; }
       targetIdxs = shuffle(bright).slice(0, Math.min(4, bright.length));
       distractorPool = shuffle(dark);
       promptTags = [];
     } else if (mode === "odd") {
-      // 仲間外れ: 同じ投稿者の画像8枚 + 別シリーズ1枚。署名距離で「本当に浮いている」ものだけ採用
-      const bySrc = new Map();
-      batch.forEach((b, i) => {
-        if (!b.src) return;
-        if (!bySrc.has(b.src)) bySrc.set(b.src, []);
-        bySrc.get(b.src).push(i);
-      });
-      const groups = [...bySrc.values()].filter((g) => g.length >= 8);
-      if (!groups.length) { stats.fPool++; continue; }
-      const g = shuffle(groups)[0].slice(0, 8);
-      const others = batch.map((_, i) => i).filter((i) => !g.includes(i) && batch[i].src !== batch[g[0]].src);
-      if (!others.length) { stats.fPool++; continue; }
-      const outIdx = shuffle(others)[0];
-      const nine = [...g, outIdx], bufs = [];
-      let fetchOk = true;
-      for (const i of nine) {
-        try { bufs.push(await hkFetch(batch[i].url, 6000)); } catch { fetchOk = false; break; }
+      // 仲間外れ: 候補から「互いに最も似ている8枚」を距離行列で選び、そこから十分離れた1枚を外れにする。
+      // 実測で「同じ投稿者=似ている」は成り立たなかった(比1.04)ため、見た目の距離だけで組む。
+      const cand = shuffle(batch.map((_, i) => i)).slice(0, Math.min(12, batch.length));
+      const idxs = [], bufs = [];
+      for (const i of cand) {
+        const b2 = await fetchImageBuf(batch[i].url, 6000).catch(() => null);
+        if (b2 && b2.length) { idxs.push(i); bufs.push(b2); }
       }
-      if (!fetchOk || bufs.some((b) => !b || !b.length)) { stats.fPool++; continue; }
-      const sigs = await sigs8x8Batch(bufs);
-      if (!sigs || !Array.isArray(sigs)) { stats.fPool++; continue; } // 署名が取れないときは出さない
-      const dOut = sigs.slice(0, 8).map((s) => sigDistance(s, sigs[8]));
-      const dIn = [];
-      for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) dIn.push(sigDistance(sigs[a], sigs[b]));
-      const mOut = dOut.reduce((x, y) => x + y, 0) / dOut.length;
-      const mIn = dIn.reduce((x, y) => x + y, 0) / dIn.length;
-      if (!(mOut > mIn * 1.35 && mOut > 10)) { stats.fPool++; continue; } // 紛らわしい組は出さない
-      targetIdxs = [outIdx];
-      distractorPool = g;
-      promptTags = [];
-    } else if (mode === "puzzle") {
-      // スライダーパズル: 1枚を3x3に切って8ピース+空白。正解は元の並び(タイルIDの順で突き合わせる)
-      const pIdx = Math.floor(Math.random() * batch.length);
-      targetIdxs = [];
-      distractorPool = [];
-      puzzleSrcIdx = pIdx;
+      if (idxs.length < 9) { stats.fPool++; continue; }
+      const s16 = await sig16sOf(bufs);
+      if (s16.some((x) => !x)) { stats.fPool++; continue; }
+      const dist = (a2, b3) => sig16Dist(s16[a2], s16[b3]);
+      let best = null;
+      for (let g = 0; g < idxs.length; g++) {
+        const others = idxs.map((_, k) => k).filter((k) => k !== g).sort((a2, b3) => dist(g, a2) - dist(g, b3));
+        const group = [g, ...others.slice(0, 7)];
+        let intra = 0, cnt = 0;
+        for (let x = 0; x < 8; x++) for (let y = x + 1; y < 8; y++) { intra += dist(group[x], group[y]); cnt++; }
+        intra /= cnt;
+        const outside = idxs.map((_, k) => k).filter((k) => group.indexOf(k) < 0);
+        if (!outside.length) continue;
+        const outK = outside.map((k) => [k, Math.min(...group.map((m) => dist(k, m)))]).sort((x, y) => y[1] - x[1])[0];
+        if (!best || intra < best.intra) best = { group, outK, intra };
+      }
+      if (process.env.DEBUG_MAKE === "1") {
+        appendFileSync("make-fail.log", `[odd3] intra=${best ? best.intra.toFixed(1) : "-"} out=${best ? best.outK[1] : "-"} n=${idxs.length}\n`);
+      }
+      if (!best || !(best.intra <= 18 && best.outK[1] >= Math.max(22, best.intra + 12))) { stats.fPool++; continue; }
+      targetIdxs = [idxs[best.outK[0]]];
+      distractorPool = best.group.map((k) => idxs[k]);
       promptTags = [];
     } else if (mode === "rotate") {
       // 回転タスク: 1枚を90/180/270度回した状態で出し、正しい向きに戻させる。
