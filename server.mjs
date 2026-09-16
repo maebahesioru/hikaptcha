@@ -1597,6 +1597,7 @@ async function makeChallenge(ip = "") {
     const ask = buildAsk(mode, promptTags, askN);
     return {
       id: cid,
+      rotateApplied, // 回転タスクの適用角度(本番の応答では落とす)
       prompt: ask.text, // 表示用の文面(形式ごとに変わる)
       ask, // 形式・タグ・選択枚数。クライアントはこれを見て表示する
       tags: promptTags, // 機械可読な出題タグ

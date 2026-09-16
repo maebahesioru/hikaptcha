@@ -39,6 +39,7 @@ def patch_once(text, old, new, label):
 s = patch_once(
     s,
     "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),",
+    "rotateApplied: c.rotateApplied, "  # 回転タスクの答え合わせ用(本番の応答には無い)
     "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, "
     "target: t.target, rot: t.rot || 0, originalUrl: t.url, tags: [...t.tags], src: t.src, postId: t.postId })),",
     "チャレンジpayload",
