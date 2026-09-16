@@ -6,7 +6,8 @@ hikabooru(ヒカマニ関連の画像アーカイブ)の実在画像を使う画
 - 依存ゼロ(Node 18+のみ。ffmpegは任意で、無い場合は画像改変だけが無効になる)
 - 他サイトへの埋め込みに対応(ウィジェット + HTTP API)
 - 公開サーバー: **https://hikaptcha.hikamers.app**
-- リポジトリ: maebahesioru/hikaptcha
+- リポジトリ: [maebahesioru/hikaptcha](https://github.com/maebahesioru/hikaptcha)
+- 管理者: [@maebahesioru2](https://x.com/maebahesioru2)(X)
 
 ## 特徴
 

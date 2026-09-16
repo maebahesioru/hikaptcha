@@ -674,13 +674,18 @@ let tmpSeq = 0;
 //    日本語テキストが鏡像になって読みにくくなる(見づらさの原因)
 //  - 回転も使わない(黒い三角が出る・幾何変換は適応的攻撃者に効かない)
 //  残るのは再圧縮と微小なガンマのみ。バイト一致は防げるが知覚索引には弱い(README参照)。
-async function transformImage(buf) {
+async function transformImage(buf, rotateDeg = 0) {
   if (!TRANSFORM || !hasFfmpeg()) return null;
   const id = (tmpSeq = (tmpSeq + 1) % 100000);
   const inp = path.join(TMP, `i${id}.jpg`);
   const out = path.join(TMP, `o${id}.jpg`);
   writeFileSync(inp, buf);
   const filters = [];
+
+  // 回転タスク用(90/180/270度)。「正しい向きに戻す」問題で使う
+  if (rotateDeg === 90) filters.push("transpose=1");
+  else if (rotateDeg === 180) filters.push("hflip", "vflip");
+  else if (rotateDeg === 270) filters.push("transpose=2");
 
   // 長辺を IMG_LONG_EDGE に揃える(タイル表示に十分・ファイルサイズも抑える)
   filters.push(`scale='if(gt(iw,ih),${IMG_LONG_EDGE},-2)':'if(gt(iw,ih),-2,${IMG_LONG_EDGE})'`);
@@ -700,9 +705,9 @@ async function transformImage(buf) {
   }
 }
 
-function registerImage(upstreamUrl, challengeId) {
+function registerImage(upstreamUrl, challengeId, rotateDeg = 0) {
   const id = randomBytes(12).toString("hex");
-  images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS, challengeId, buf: null, transformed: null });
+  images.set(id, { url: upstreamUrl, exp: Date.now() + IMG_TTL_MS, challengeId, rot: rotateDeg || 0, buf: null, transformed: null });
   if (images.size > IMG_MAX) {
     // 期限切れ→古い順に捨てる
     const arr = [...images.entries()].sort((a, b) => a[1].exp - b[1].exp);
@@ -846,7 +851,7 @@ const MODE_WEIGHTS = (() => {
   //   notor  … 「どちらも写っていない」は not と同じ形で、実測3件で誤り平均2.0枚(notと同等)
   //   withnot… 「Aが写っていてBが写っていない」は実測2件で完全一致1・誤り平均0.5枚(良好)
   // 重みを変えたい場合は MODE_WEIGHTS を指定する
-  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,and=0";
+  const raw = process.env.MODE_WEIGHTS || "single=3,not=3,notpick=1,pick=1,or=1,xor=1,notor=1,withnot=1,rotate=1,and=0";
   const m = new Map();
   for (const part of raw.split(",")) {
     const [k, v] = part.split("=");
@@ -908,6 +913,8 @@ function buildAsk(mode, tags, n) {
       return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」も「${b}」も写っていない画像を全部選んでください` };
     case "withnot":
       return { mode, tags, n: 0, maxSelect: 0, text: `「${a}」が写っていて「${b}」が写っていない画像を全部選んでください` };
+    case "rotate":
+      return { mode, tags: [], n: 0, maxSelect: 0, step: 90, text: "画像が正しい向きになるように回してください" };
     default:
       return { mode: "single", tags, n: 0, maxSelect: 0, text: `「${a}」の画像を全部選んでください` };
   }
@@ -1190,9 +1197,19 @@ async function makeChallenge(ip = "") {
     let targetIdxs = [];
     let distractorPool = [];
     let askN = 0;
+    let rotateApplied = 0; // 回転タスクで実際に回した角度
 
     const PAIR_MODES = new Set(["and", "or", "xor", "notor", "withnot"]);
-    if (PAIR_MODES.has(mode)) {
+    if (mode === "rotate") {
+      // 回転タスク: 1枚を90/180/270度回した状態で出し、正しい向きに戻させる。
+      // 正解は「戻した角度」なので、サーバーが持つ適用角度と突き合わせるだけで検証できる。
+      const angle = [90, 180, 270][Math.floor(Math.random() * 3)];
+      const idx = Math.floor(Math.random() * batch.length);
+      batch[idx].rot = angle;
+      rotateApplied = angle; // 検証で使う(タイル側ではなく出題側に持たせる)
+      targetIdxs = [idx];
+      distractorPool = [];
+    } else if (PAIR_MODES.has(mode)) {
       // 2タグの組み合わせ方で出題を作る:
       //   and   両方が写っている / or どちらかが写っている / xor 片方だけ写っている
       //   notor どちらも写っていない / withnot Aが写っていてBが写っていない
@@ -1467,11 +1484,12 @@ async function makeChallenge(ip = "") {
 
     // 正解 = 条件を満たす画像 / ダミー = 条件を満たさない画像
     const targetSet = new Set(targetIdxs);
-    const needs = GRID_SIZE - targetSet.size;
-    if (needs < 1) { stats.fNeeds++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNeeds" + " mode=" + mode + "\n"); continue; }
+    // 回転タスクは1枚だけ出す(ダミー無し)ので、9枚グリッド前提のチェックを外す
+    const needs = mode === "rotate" ? 0 : GRID_SIZE - targetSet.size;
+    if (mode !== "rotate" && needs < 1) { stats.fNeeds++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fNeeds" + " mode=" + mode + "\n"); continue; }
     // ダミー候補(形式ごとに構成済み)から、正解と重複しないように必要枚数を取る
     const pool = distractorPool.filter((idx) => !targetSet.has(idx));
-    if (pool.length < needs) { stats.fPool++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fPool" + " mode=" + mode + "\n"); continue; }
+    if (mode !== "rotate" && pool.length < needs) { stats.fPool++; if (process.env.DEBUG_MAKE === "1") appendFileSync("make-fail.log", "[make-fail] fPool" + " mode=" + mode + "\n"); continue; }
 
     // --- 見分けやすさフィルタ(実測で導入) ---
     // ダミー画像が正解とタグを同程度共有していると、人間には見分けがつかない。
@@ -1553,8 +1571,9 @@ async function makeChallenge(ip = "") {
         id: randomBytes(6).toString("hex"),
         postId: batch[idx].id,
         url: batch[idx].url,
-        imgId: registerImage(batch[idx].url, cid), // クライアントには imgId 経由でのみ配信(投稿IDを隠す)
+        imgId: registerImage(batch[idx].url, cid, batch[idx].rot || 0), // 回転タスクでは角度も渡す
         target: true,
+        rot: batch[idx].rot || 0, // 回転タスクの角度(デバッグコピーのみ応答に載る)
         // 診断用にタグ・元ネタを保持する。応答には含めない(本番のpayloadはid/urlのみ)。
         // テスト用コピーだけがこれを応答に載せ、精度・多様性の検証に使う。
         tags: [...batch[idx].tags],
@@ -1564,8 +1583,9 @@ async function makeChallenge(ip = "") {
         id: randomBytes(6).toString("hex"),
         postId: batch[idx].id,
         url: batch[idx].url,
-        imgId: registerImage(batch[idx].url, cid),
+        imgId: registerImage(batch[idx].url, cid, batch[idx].rot || 0),
         target: false,
+        rot: batch[idx].rot || 0,
         tags: [...batch[idx].tags],
         src: batch[idx].src,
       })),
@@ -1771,7 +1791,7 @@ async function handleApi(req, res, url) {
       // 視覚フィルタで事前取得済みならそれを使う(再ダウンロードしない)
       const pf = prefetched.get(img.url);
       if (pf && Date.now() < pf.exp) {
-        const transformed = await transformImage(pf.buf);
+        const transformed = await transformImage(pf.buf, img.rot || 0);
         const body = transformed || pf.buf;
         img.buf = body;
         res.writeHead(200, {
@@ -1794,7 +1814,7 @@ async function handleApi(req, res, url) {
         return res.end("upstream error");
       }
       const orig = Buffer.from(await up.arrayBuffer());
-      const transformed = await transformImage(orig);
+      const transformed = await transformImage(orig, img.rot || 0);
       const body = transformed || orig;
       img.buf = body; // キャッシュ(同じ出題中は同じ画像を返す)
       res.writeHead(200, {
@@ -1965,6 +1985,21 @@ async function handleApi(req, res, url) {
         risk: RISK_REJECT,
         expired: true,
       });
+    }
+
+    // 回転タスク: 申告された角度を、サーバーが適用した角度と突き合わせる
+    if (c.mode === "rotate") {
+      const applied = Number(c.rotateApplied) || 0;
+      const claimed = ((Number(body?.rotate) || 0) % 360 + 360) % 360;
+      if (((claimed + applied) % 360) !== 0) {
+        c.attempts = (c.attempts || 0) + 1;
+        const left = MAX_ATTEMPTS - c.attempts;
+        if (left <= 0) {
+          challenges.delete(id);
+          return sendJson(res, 410, { ok: false, error: "不正解です。新しい問題に挑戦してください", expired: true });
+        }
+        return sendJson(res, 400, { ok: false, error: `向きが違います(あと${left}回)。回し直してください`, remaining: left });
+      }
     }
 
     // --- 層5: 挙動シグナル(補助。偽装可能なので単独では拒否理由にしない) ---

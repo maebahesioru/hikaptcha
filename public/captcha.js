@@ -80,6 +80,15 @@
     }
     .hkc-tile.sel .hkc-check { display: block; }
     .hkc-bar { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    /* 回転タスク: 画像を大きく1枚だけ出し、回転させて向きを直す */
+    .hkc-rotwrap {
+      position: relative; width: 100%; aspect-ratio: 3 / 2; background: #000;
+      border: 2px solid #52525b; border-radius: 8px; overflow: hidden;
+    }
+    .hkc-rotimg {
+      width: 100%; height: 100%; object-fit: contain; display: block;
+      transition: transform .28s cubic-bezier(.2, .9, .3, 1.1);
+    }
     .hkc-btn {
       font: inherit; font-size: 12px; font-weight: 700;
       border: 0; border-radius: 8px; padding: 7px 12px; cursor: pointer;
@@ -273,6 +282,7 @@
     root.appendChild(style);
     const box = el("div", "hkc");
     let lastChallengeId = null; // 入場アニメを出題ごとに1回だけにするための記憶
+    let rotDeg = 0; // 回転タスクで今どの向きに回しているか(90度刻み)
     root.appendChild(box);
 
     let ch = null;
@@ -376,6 +386,36 @@
       // 出題が変わった時だけ入場アニメを再生する(進捗更新の再描画でチラつかせない)
       const isNewChallenge = !!(ch.id && ch.id !== lastChallengeId);
       if (ch.id) lastChallengeId = ch.id;
+      // 回転タスクはグリッドではなく1枚の画像を出す
+      if (ch.ask && ch.ask.mode === "rotate") {
+        const t = ch.tiles[0];
+        sel = new Set([t.id]); // 選択は固定(検証は角度で行う)
+        const wrap = el("div", "hkc-rotwrap");
+        const im = document.createElement("img");
+        im.className = "hkc-rotimg";
+        im.src = t.url;
+        im.alt = "";
+        im.draggable = false;
+        im.referrerPolicy = "no-referrer";
+        im.style.transform = "rotate(" + rotDeg + "deg)";
+        wrap.appendChild(im);
+        box.appendChild(wrap);
+        const hint = el("p", "hkc-msg", "「↻ 回す」で向きを直してから確認してください");
+        box.appendChild(hint);
+        const rbar = el("div", "hkc-bar");
+        const rb = el("button", "hkc-btn", "↻ 回す");
+        rb.type = "button";
+        rb.addEventListener("click", function () {
+          if (busy) return;
+          sig.interactionSeen = true;
+          sig.clicks++;
+          rotDeg = (rotDeg + 90) % 360;
+          im.style.transform = "rotate(" + rotDeg + "deg)";
+        });
+        rbar.appendChild(rb);
+        box.appendChild(rbar);
+      }
+
       const grid = el("div", "hkc-grid" + (isNewChallenge ? "" : " static"));
       ch.tiles.forEach(function (t, idx) {
         const btn = el("button", "hkc-tile");
@@ -585,6 +625,7 @@
           elapsedMs: Date.now() - challengeAt,
           signals: sig,
         };
+        if (ch.ask && ch.ask.mode === "rotate") payload.rotate = rotDeg;
         if (hpInput) payload[(ch.honeypot) || "website"] = hpInput.value;
 
         const r = await fetch(apiBase + "/api/verify", {

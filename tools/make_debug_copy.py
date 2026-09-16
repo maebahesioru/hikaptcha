@@ -40,7 +40,7 @@ s = patch_once(
     s,
     "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}` })),",
     "tiles: c.tiles.map((t) => ({ id: t.id, url: `${base}/api/img/${t.imgId}`, "
-    "target: t.target, originalUrl: t.url, tags: [...t.tags], src: t.src, postId: t.postId })),",
+    "target: t.target, rot: t.rot || 0, originalUrl: t.url, tags: [...t.tags], src: t.src, postId: t.postId })),",
     "チャレンジpayload",
 )
 
