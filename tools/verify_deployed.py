@@ -1,25 +1,20 @@
-"""デプロイ後の最終確認(スクショ+画像ロード)"""
+"""公開ドキュメントとデモの見た目を確認(スクショ)"""
 from playwright.sync_api import sync_playwright
-OUT = "C:/Users/maeba/Desktop/hikamani-captcha/.docs-shots/deployed.png"
+OUT = "C:/Users/maeba/Desktop/hikamani-captcha/.docs-shots"
 with sync_playwright() as p:
     b = p.chromium.launch()
-    pg = b.new_page(viewport={"width": 1180, "height": 980}, device_scale_factor=1.4)
-    errs = []
-    pg.on("pageerror", lambda e: errs.append(str(e)))
+    pg = b.new_page(viewport={"width": 1280, "height": 1000}, device_scale_factor=1.4)
+    # ドキュメント
+    pg.goto("https://hikaptcha.hikamers.app/docs", wait_until="load")
+    pg.wait_for_timeout(1200)
+    pg.screenshot(path=OUT + "/deployed-docs.png")
+    titles = pg.eval_on_selector_all("h2", "els => els.map(e => e.textContent.trim())")
+    print("docs の h2:", titles)
+    over = pg.evaluate("() => [...document.querySelectorAll('*')].filter(e => e.scrollWidth > e.clientWidth + 2 && e.clientWidth > 0).length")
+    print("横スクロール要素:", over)
+    # デモ
     pg.goto("https://hikaptcha.hikamers.app/", wait_until="load")
-    pg.wait_for_timeout(3000)
-    info = pg.evaluate("""() => {
-      const sh = [...document.querySelectorAll('*')].map(e => e.shadowRoot).filter(Boolean)[0];
-      if (!sh) return {shadow: false};
-      const imgs = [...sh.querySelectorAll('img')];
-      const texts = [...sh.querySelectorAll('*')].map(e => e.textContent.trim()).filter(t => t && t.length < 80);
-      return {shadow: true, images: imgs.length, loaded: imgs.filter(i => i.complete && i.naturalWidth > 0).length,
-              https: imgs.filter(i => i.src.startsWith('https')).length,
-              prompt: texts.find(t => t.includes('選んでください')) || null,
-              buttons: [...sh.querySelectorAll('button')].map(b => b.textContent.trim()).slice(0,3)};
-    }""")
-    print("ページ:", info)
-    print("JSエラー:", errs[:3] if errs else "なし")
-    pg.screenshot(path=OUT)
-    print("スクショ:", OUT)
+    pg.wait_for_timeout(2500)
+    pg.screenshot(path=OUT + "/deployed.png")
+    print("デモ撮影OK")
     b.close()

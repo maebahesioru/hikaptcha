@@ -275,6 +275,10 @@ curl -X POST https://hikaptcha.hikamers.app/api/verify -H "content-type: applica
 | 変数 | 既定 | 意味 |
 |---|---|---|
 | `PORT` | 3107 | 待受ポート |
+| `CHALLENGE_TTL_MS` | 300000 (5分) | 出題の有効期限 |
+| `TOKEN_TTL_MS` | 300000 (5分) | 解決トークンの有効期限(消費されるまで) |
+| `TICKET_TTL_MS` | 300000 (5分) | 認証セッション(チケット)の有効期限 |
+| `MAX_ATTEMPTS` | 3 | 1出題あたりの回答試行回数 |
 | `PUBLIC_BASE` | (なし) | 画像URLに使う公開URL(例 `https://hikaptcha.hikamers.app`)。未設定の場合はリクエストヘッダから推定する |
 | `MODE_WEIGHTS` | single=3,not=3,notpick=1,pick=1,or=1,and=0 | 出題形式の重み(0で無効化) |
 | `FORCE_MODE` | (なし) | 出題形式を固定する(検証用) |
@@ -333,31 +337,6 @@ ENV PORT=3000
 EXPOSE 3000
 CMD ["node", "server.mjs"]
 ```
-
-### デプロイ(本番)
-
-公開URL: **https://hikaptcha.hikamers.app**(HTTPでアクセスするとHTTPSに転送される)
-
-```
-GitHub (maebahesioru/hikaptcha, master)
-   └─ Coolify (192.168.1.73) Dockerfileビルド → コンテナ :3000
-        └─ Traefik → Cloudflare Tunnel → hikaptcha.hikamers.app
-```
-
-| 項目 | 値 |
-|---|---|
-| Coolify | `https://coolify.hikamers.app`(アプリ名 HIKAPTCHA) |
-| ビルド | Dockerfile(`/Dockerfile`)、ポート3000 |
-| ドメイン | `http://hikaptcha.hikamers.app`(Coolify設定値。HTTPSはCloudflareが終端する) |
-| DNS | ワイルドカード `*.hikamers.app` → トンネル(個別レコード不要) |
-| トンネル | ingress にホスト名の登録が必要(`tools/deploy_cloudflare.py check` / `add`) |
-| 環境変数 | `PUBLIC_BASE=https://hikaptcha.hikamers.app` |
-
-更新手順: push → CoolifyでRedeploy(API: `POST /api/v1/deploy?uuid=<app-uuid>`、所要約60秒)。
-
-**注意**: Cloudflare Tunnelのingressにホスト名が無いと、DNSが通っていても404になる
-(cloudflaredは未知のホストに `http_status:404` を返す)。新しいサブドメインを追加する場合は
-`tools/deploy_cloudflare.py` で登録する。
 
 ## テスト
 

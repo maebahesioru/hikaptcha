@@ -38,9 +38,11 @@ const HIKABOORU_API = HIKABOORU_BASE + "/api";
 const PORT = Number(process.env.PORT || 3107);
 
 const GRID_SIZE = 9;
-const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 出題の有効期限
-const MAX_ATTEMPTS = 3; // 1出題あたりの回答試行回数
-const TOKEN_TTL_MS = 5 * 60 * 1000; // 解決トークンの有効期限(消費されるまで)
+// 時間まわりは環境変数で調整できる(既定はすべて5分)
+const MIN = 60 * 1000;
+const CHALLENGE_TTL_MS = Number(process.env.CHALLENGE_TTL_MS || 5 * MIN); // 出題の有効期限
+const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS || 5 * MIN); // 解決トークンの有効期限(消費されるまで)
+const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS || 3); // 1出題あたりの回答試行回数
 // IPごとの出題+回答の上限。固定窓だと「使い切ったら窓が終わるまで全拒否」で
 // 待ち時間が最大10分になり、人間の試行錯誤でも詰まる(実測で自分でも踏んだ)。
 // → トークンバケットにして**使った分が少しずつ回復する**方式にした(崖を作らない)。
@@ -74,7 +76,7 @@ const HARD_MIN_SOLVE_MS = Number(process.env.HARD_MIN_SOLVE_MS || MIN_SOLVE_MS);
 const MIN_HUMAN_MS = 700; // PoW時間を差し引いた「人間の操作時間」の下限
 const HONEYPOT_FIELD = "website"; // ボットが埋めがちな隠しフィールド名
 const RISK_REJECT = 2; // リスク点がこれ以上なら拒否
-const TICKET_TTL_MS = 5 * 60 * 1000;
+const TICKET_TTL_MS = Number(process.env.TICKET_TTL_MS || 5 * MIN);
 // サーバーが観測できる事実に基づくしきい値(クライアント申告と違い偽装できない)
 const IMG_FETCH_MIN_RATIO = 0.75; // 出題画像のうち最低これだけ実際に取得されていること
 const CLAIM_SLACK_MS = 5000; // クライアント申告が実測より大きく超えたら不正とみなす余裕
